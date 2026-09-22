@@ -1,0 +1,47 @@
+import {
+  "moonbitlang/async@0.21.3",
+  "moonbitlang/async@0.21.3/fs",
+  "moonbitlang/async@0.21.3/http",
+  "moonbitlang/async@0.21.3/process",
+  "moonbitlang/async@0.21.3/stdio",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/env",
+}
+
+async fn main {
+  let root = @fs.tmpdir(prefix="moon-taze-native-probe")
+  let source = @utf8.encode("probe\n")
+  let first = root + "\\first.txt"
+  let second = root + "\\second.txt"
+  @fs.write_file(first, source, sync=@fs.SyncMode::Data)
+  let read_back = @fs.read_file(first)
+  @fs.rename(first, second, replace=false)
+  let renamed = @fs.exists(second)
+
+  let https = @async.with_timeout_opt(5000, () => @http.get(
+    "https://mooncakes.io/api/v0/modules/moonbitlang%2Fasync",
+  ))
+  let https_status = match https {
+    None => "timeout"
+    Some((response, _)) => "HTTP \{response.code}"
+  }
+
+  let process_result = try {
+    let (code, stdout, _) = @process.collect_output("moon", ["version"], inherit_env=true)
+    "exit=\{code}, stdout=\{@utf8.decode_lossy(stdout.binary())}"
+  } catch {
+    error => "error=\{error}"
+  }
+
+  let terminal = try {
+    ignore(@stdio.stdin.fd())
+    "stdin-available=true"
+  } catch {
+    _ => "stdin-fd=unavailable"
+  }
+  println("native_probe_root=\{root}")
+  println("fs_read=\{@utf8.decode_lossy(read_back.binary())}, atomic_rename=\{renamed}")
+  println("https=\{https_status}")
+  println("process=\{process_result}")
+  println("terminal=\{terminal}")
+}

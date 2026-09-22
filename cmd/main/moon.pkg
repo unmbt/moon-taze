@@ -1,5 +1,9 @@
-// import {
-//   "unmbt/moon-taze" @lib,
-// }
+import {
+  "unmbt/moon-taze" @taze,
+  "moonbitlang/async",
+  "moonbitlang/async/fs",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/env",
+}
 
 pkgtype(kind: "executable")

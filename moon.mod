@@ -19,8 +19,12 @@ repository = ""
 
 license = "MIT"
 
-keywords = []
+keywords = [ ]
 
 preferred_target = "native"
 
 description = ""
+
+import {
+  "moonbitlang/async@0.21.3",
+}

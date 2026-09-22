@@ -1,0 +1,171 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "unmbt/moon-taze"
+
+import {
+  "moonbitlang/core/debug",
+  "moonbitlang/core/json",
+}
+
+// Values
+pub async fn check_manifest(Manifest, mode~ : UpdateMode, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+
+pub async fn check_manifest_filtered(Manifest, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+
+pub async fn check_path(String, module_name~ : String, mode~ : UpdateMode) -> CheckPlan
+
+pub async fn check_path_filtered(String, module_name~ : String, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String]) -> CheckPlan
+
+pub fn choose_version(String, Array[String], mode~ : UpdateMode) -> String? raise SemVerError
+
+pub fn parse_manifest(Bytes, path~ : String, module_name~ : String) -> ParseResult
+
+pub fn parse_version(String) -> SemVer raise SemVerError
+
+pub async fn query_mooncakes(root~ : String, String) -> ModuleMetadata raise RegistryError
+
+pub fn registry_request_failed(String) -> RegistryError
+
+pub fn select_version(SemVer, Array[SemVer], latest? : SemVer, mode~ : UpdateMode) -> SemVer?
+
+pub fn selector_valid(String) -> Bool
+
+// Errors
+pub suberror RegistryError {
+  RequestFailed(String)
+  InvalidMetadata(String)
+} derive(@debug.Debug)
+
+pub suberror SemVerError {
+  InvalidVersion(String)
+}
+
+// Types and methods
+pub enum ChangeStatus {
+  UpdateAvailable
+  UpToDate
+  NoCandidate
+  Skipped
+  Error
+} derive(Eq, @debug.Debug)
+
+pub struct CheckPlan {
+  changes : Array[DependencyChange]
+  diagnostics : Array[Diagnostic]
+  has_errors : Bool
+} derive(Eq, @debug.Debug)
+
+pub struct Clock {
+  now_ms : () -> Int64
+}
+pub fn Clock::Clock(() -> Int64) -> Self
+
+pub struct Dependency {
+  module : String
+  manifest : String
+  name : String
+  version : String
+  source : DependencySource
+  span : SourceSpan
+} derive(Eq, @debug.Debug)
+
+pub struct DependencyChange {
+  dependency : Dependency
+  mode : UpdateMode
+  status : ChangeStatus
+  target : String?
+  candidates : Array[String]
+  diff : DiffKind?
+  reason : String?
+  diagnostics : Array[Diagnostic]
+} derive(Eq, @debug.Debug)
+
+pub enum DependencySource {
+  Registry
+  LocalWorkspace
+  Unsupported
+} derive(Eq, @debug.Debug)
+
+pub struct Diagnostic {
+  severity : DiagnosticSeverity
+  code : String
+  message : String
+  manifest : String?
+  dependency : String?
+  line : Int?
+  column : Int?
+} derive(Eq, @debug.Debug)
+
+pub enum DiagnosticSeverity {
+  Warning
+  Error
+} derive(Eq, @debug.Debug)
+
+pub enum DiffKind {
+  Major
+  Minor
+  Patch
+  Prerelease
+} derive(Eq, @debug.Debug)
+
+pub struct Manifest {
+  module_name : String
+  path : String
+  source : Bytes
+  dependencies : Array[Dependency]
+} derive(Eq, @debug.Debug)
+
+pub struct ModuleMetadata {
+  module : String
+  latest : String?
+  versions : Array[VersionMetadata]
+} derive(Eq, @debug.Debug)
+pub fn ModuleMetadata::ModuleMetadata(String, String?, Array[VersionMetadata]) -> Self
+
+pub struct ParseResult {
+  manifest : Manifest?
+  diagnostics : Array[Diagnostic]
+} derive(Eq, @debug.Debug)
+
+type RegistryOverview derive(@debug.Debug, @json.FromJson)
+
+type RegistryVersion derive(@debug.Debug, @json.FromJson)
+
+pub struct SemVer {
+  major : Int
+  minor : Int
+  patch : Int
+  prerelease : Array[String]
+  build : Array[String]
+} derive(Eq, @debug.Debug)
+pub fn SemVer::compare(Self, Self) -> Int
+pub fn SemVer::to_string(Self) -> String
+
+pub struct SourceSpan {
+  start : Int
+  end : Int
+  line : Int
+  column : Int
+} derive(Eq, @debug.Debug)
+
+pub(all) enum UpdateMode {
+  Default
+  Major
+  Minor
+  Patch
+  Latest
+  Stable
+  Newest
+  Next
+} derive(Eq, @debug.Debug)
+
+pub struct VersionMetadata {
+  version : String
+  yanked : Bool
+  yanked_reason : String?
+  published_at : Int64?
+} derive(Eq, @debug.Debug)
+pub fn VersionMetadata::VersionMetadata(String, Bool, String?, Int64?) -> Self
+
+// Type aliases
+
+// Traits

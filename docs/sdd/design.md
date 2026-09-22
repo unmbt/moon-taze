@@ -136,7 +136,7 @@ latest 指针为空或缺失时保留 None；指针指向列表以外的版本�
 
 时间按 RFC 3339 解析为 UTC；同一执行固定 `now`。时间仅在 newest/next、成熟期、时间展示/排序需要时查询：先应用无需时间的过滤，再请求相关候选；timediff 另取当前与目标版本时间。不同消费者共享版本详情请求。缺字段与 HTTP 失败分开处理，见 D-05/D-07。
 
-本次核验的最小摘录（2026-09-22；不是稳定测试数据）：
+本次核验的最小摘录（2026-09-23；不是稳定测试数据）：
 
 ```json
 {
@@ -398,14 +398,14 @@ Registry 状态属于检查时的快照，缓存 TTL 不代表写入瞬间仍未
 
 核心使用纯函数版本梯测试；Registry 用注入响应和本地假 HTTP 服务；IO 测试用唯一临时目录及隔离缓存；回调、时间、重试、排序不依赖真实时钟。文本断言与少量结构快照分开，不能用快照代替版本选择正确性断言。
 
-Native 候选库已有 HTTP/FS/process 接口和平台实现文件，但本次未编译运行 moon-taze，也未证明三平台可分发。T-01 先验证当前 Windows 的 HTTPS、证书验证、文件替换和进程能力；T-13 自 P1a 起逐步运行三平台已有功能子集，P4 完成构建/运行/终端的最终验收。失败时修复适配层或显式更新设计，不能暗改为 Node 包装或宣称测试通过。
+Native 候选库已有 HTTP/FS/process 接口和平台实现文件；P0 已在 Windows x86_64 编译运行隔离探针并记录 HTTPS、系统证书、文件替换、进程和终端结果。尚未证明三平台可分发。T-13 自 P1a 起逐步运行三平台已有功能子集，P4 完成构建/运行/终端的最终验收。失败时修复适配层或显式更新设计，不能暗改为 Node 包装或宣称测试通过。
 
 具体场景和追踪矩阵见 [acceptance.md](acceptance.md)，任务完成门槛见 [tasks.md](tasks.md)。真实网络冒烟只核对响应结构和只读检查，不断言“今天最新版本固定为某值”，也不更新开发者项目。
 
 <a id="d-12"></a>
 ## D-12 核验记录、差异和来源
 
-核验日期为 **2026-09-22**；以下结论只陈述已取得的证据。在线 latest 文档不视为对安装版本的无条件保证。
+核验日期为 **2026-09-23**；以下结论只陈述已取得的证据。在线 latest 文档不视为对安装版本的无条件保证。
 
 | 事实 | 证据 | 限制 |
 | --- | --- | --- |
@@ -414,7 +414,7 @@ Native 候选库已有 HTTP/FS/process 接口和平台实现文件，但本次�
 | 裸版本与 `includeLocked` | [npm registry](../../taze/src/registries/npm/registry.ts) 中 targetMode 与 updateTargetVersion | moon-taze 默认参与，是明确适配 |
 | stable/next/newest 实际算法 | [versions.ts](../../taze/src/utils/versions.ts)、[版本测试](../../taze/test/versions.test.ts)、[元数据转换](../../taze/src/utils/packument.ts) | newest 上游取列表末项，不在该函数中按时间排序 |
 | 并发/超时/重试/缓存参数 | [CLI](../../taze/src/cli.ts)、[缓存](../../taze/src/registries/cache.ts) | 损坏缓存和错误分类采用本设计契约 |
-| MoonBit 本地版本 | `moon version` → `0.1.20260904 (94521db 2026-09-04)` | 发行最低版本在 T-13 实测确定 |
+| MoonBit 本地版本 | `moon version` → `0.1.20260920 (914d7da 2026-09-20)` | 发行最低版本在 T-13 实测确定 |
 | 新 DSL 清单与工作区 | [模块配置](https://docs.moonbitlang.com/en/latest/toolchain/moon/module.html)、[工作区](https://docs.moonbitlang.com/en/latest/toolchain/moon/workspace.html) | 只承诺这里列出的依赖/成员输入形式 |
 | 最小版本选择 | [包管理说明](https://docs.moonbitlang.com/en/latest/toolchain/moon/package-manage-tour.html#semantic-versioning-convention) | 不把声明当作实际安装版本 |
 | 概览 API | [async 概览](https://mooncakes.io/api/v0/modules/moonbitlang/async) | 实际返回 0.22.1 及 versions/yanked 字段，服务可能变化 |

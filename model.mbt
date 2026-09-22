@@ -1,0 +1,172 @@
+///|
+/// Source of a dependency reference.
+pub enum DependencySource {
+  Registry
+  LocalWorkspace
+  Unsupported
+} derive(Debug, Eq)
+
+///|
+/// UTF-8 source position and byte range.
+pub struct SourceSpan {
+  pub start : Int
+  pub end : Int
+  pub line : Int
+  pub column : Int
+} derive(Debug, Eq)
+
+///|
+/// A dependency declaration extracted from a manifest.
+pub struct Dependency {
+  pub module : String
+  pub manifest : String
+  pub name : String
+  pub version : String
+  pub source : DependencySource
+  pub span : SourceSpan
+} derive(Debug, Eq)
+
+///|
+pub enum DiagnosticSeverity {
+  Warning
+  Error
+} derive(Debug, Eq)
+
+///|
+/// A stable, user-facing diagnostic.
+pub struct Diagnostic {
+  pub severity : DiagnosticSeverity
+  pub code : String
+  pub message : String
+  pub manifest : String?
+  pub dependency : String?
+  pub line : Int?
+  pub column : Int?
+} derive(Debug, Eq)
+
+///|
+pub enum ChangeStatus {
+  UpdateAvailable
+  UpToDate
+  NoCandidate
+  Skipped
+  Error
+} derive(Debug, Eq)
+
+///|
+pub enum DiffKind {
+  Major
+  Minor
+  Patch
+  Prerelease
+} derive(Debug, Eq)
+
+///|
+/// Metadata returned by a Registry overview request.
+pub struct VersionMetadata {
+  pub version : String
+  pub yanked : Bool
+  pub yanked_reason : String?
+  pub published_at : Int64?
+} derive(Debug, Eq)
+
+///|
+pub struct ModuleMetadata {
+  pub module : String
+  pub latest : String?
+  pub versions : Array[VersionMetadata]
+} derive(Debug, Eq)
+
+///|
+/// Construct registry metadata for an injected registry implementation.
+pub fn VersionMetadata::VersionMetadata(
+  version : String,
+  yanked : Bool,
+  yanked_reason : String?,
+  published_at : Int64?,
+) -> VersionMetadata {
+  { version, yanked, yanked_reason, published_at, }
+}
+
+///|
+/// Construct a module overview for an injected registry implementation.
+pub fn ModuleMetadata::ModuleMetadata(
+  module : String,
+  latest : String?,
+  versions : Array[VersionMetadata],
+) -> ModuleMetadata {
+  { module, latest, versions, }
+}
+
+///|
+/// The result of resolving one dependency.
+pub struct DependencyChange {
+  pub dependency : Dependency
+  pub mode : UpdateMode
+  pub status : ChangeStatus
+  pub target : String?
+  pub candidates : Array[String]
+  pub diff : DiffKind?
+  pub reason : String?
+  pub diagnostics : Array[Diagnostic]
+} derive(Debug, Eq)
+
+///|
+/// A complete read-only check result. It is deliberately data-only in P1a.
+pub struct CheckPlan {
+  pub changes : Array[DependencyChange]
+  pub diagnostics : Array[Diagnostic]
+  pub has_errors : Bool
+} derive(Debug, Eq)
+
+///|
+/// A clock port reserved for time-aware strategies introduced after P1a.
+pub struct Clock {
+  pub now_ms : () -> Int64
+}
+
+///|
+/// Construct a deterministic clock port for tests or future strategies.
+pub fn Clock::Clock(now_ms : () -> Int64) -> Clock {
+  { now_ms, }
+}
+
+///|
+fn diagnostic(
+  code : String,
+  message : String,
+  manifest : String?,
+  dependency : String?,
+  line : Int?,
+  column : Int?,
+) -> Diagnostic {
+  {
+    severity: DiagnosticSeverity::Error,
+    code,
+    message,
+    manifest,
+    dependency,
+    line,
+    column,
+  }
+}
+
+///|
+fn warning(
+  code : String,
+  message : String,
+  manifest : String?,
+  dependency : String?,
+  line : Int?,
+  column : Int?,
+) -> Diagnostic {
+  {
+    severity: DiagnosticSeverity::Warning,
+    code,
+    message,
+    manifest,
+    dependency,
+    line,
+    column,
+  }
+}
