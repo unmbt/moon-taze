@@ -1,0 +1,5 @@
+// import {
+//   "unmbt/moon-taze" @lib,
+// }
+
+pkgtype(kind: "executable")
