@@ -112,12 +112,55 @@ pub struct DependencyChange {
 } derive(Debug, Eq)
 
 ///|
-/// A complete read-only check result. It is deliberately data-only in P1a.
+/// An in-memory check result. Use the accessors; selections belong to this plan.
 pub struct CheckPlan {
-  pub changes : Array[DependencyChange]
-  pub diagnostics : Array[Diagnostic]
-  pub has_errors : Bool
-} derive(Debug, Eq)
+  priv entries : Array[DependencyChange]
+  priv issues : Array[Diagnostic]
+  priv snapshots : Array[Manifest]
+  priv identity : Ref[Int]
+  priv cwd : String
+}
+
+///|
+fn copy_change(change : DependencyChange) -> DependencyChange {
+  {
+    ..change,
+    candidates: change.candidates.copy(),
+    diagnostics: change.diagnostics.copy(),
+  }
+}
+
+///|
+fn make_plan(
+  snapshots : Array[Manifest],
+  changes : Array[DependencyChange],
+  diagnostics : Array[Diagnostic],
+  cwd? : String = @env.current_dir().unwrap_or("."),
+) -> CheckPlan {
+  {
+    snapshots: snapshots.map(m => { ..m, dependencies: m.dependencies.copy(), }),
+    entries: changes.map(copy_change),
+    issues: diagnostics.copy(),
+    identity: Ref(0),
+    cwd,
+  }
+}
+
+///|
+/// Return a detached copy, including nested candidate and diagnostic arrays.
+pub fn CheckPlan::changes(self : CheckPlan) -> Array[DependencyChange] {
+  self.entries.map(copy_change)
+}
+
+///|
+pub fn CheckPlan::diagnostics(self : CheckPlan) -> Array[Diagnostic] {
+  self.issues.copy()
+}
+
+///|
+pub fn CheckPlan::has_errors(self : CheckPlan) -> Bool {
+  has_error_diagnostics(self.issues) || self.entries.any(c => c.status == Error)
+}
 
 ///|
 /// A clock port reserved for time-aware strategies introduced after P1a.

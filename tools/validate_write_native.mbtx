@@ -1,0 +1,33 @@
+import {
+  "moonbitlang/async@0.21.3",
+  "moonbitlang/async@0.21.3/fs",
+  "moonbitlang/async@0.21.3/process",
+  "moonbitlang/core/env",
+}
+
+// Usage: moon run --target native tools/validate_write_native.mbtx [extra clang flags...]
+// Requires MOON_HOME and clang on PATH. An optional ASAN_RUNTIME_DIR adds the DLL directory.
+async fn main {
+  let cwd = @env.current_dir().unwrap()
+  let moon_root = @env.get_env_var("MOON_HOME").unwrap()
+  let root = @fs.tmpdir(prefix="moon-taze-asan")
+  defer @fs.rmdir(root, recursive=true)
+  let executable = root + "/write-native-asan.exe"
+  let args = ["-g", "-fsanitize=address", "-fno-omit-frame-pointer", "-I", moon_root + "/include", cwd + "/tools/write_native_asan.c", "-o", executable]
+  if @env.get_env_var("OS") == Some("Windows_NT") {
+    args.append(["-shared-libsan", "-D_DLL", "-D_MT", "-fms-runtime-lib=dll"])
+  }
+  args.append(@env.args()[1:].to_owned())
+  let (code, stdout, stderr) = @process.collect_output("clang", args, inherit_env=true, cwd=root)
+  if stdout.text() != "" { println(stdout.text()) }
+  if stderr.text() != "" { println(stderr.text()) }
+  if code != 0 { fail("ASan compilation failed: \{code}") }
+  let extra_env = { "ASAN_OPTIONS": "detect_leaks=0:halt_on_error=1" }
+  if @env.get_env_var("ASAN_RUNTIME_DIR") is Some(runtime_dir) {
+    extra_env["PATH"] = runtime_dir + ";" + @env.get_env_var("PATH").unwrap_or("")
+  }
+  let (code, stdout, stderr) = @process.collect_output(executable, [root], inherit_env=true, extra_env~)
+  if stdout.text() != "" { println(stdout.text()) }
+  if stderr.text() != "" { println(stderr.text()) }
+  if code != 0 { fail("ASan harness failed: \{code}") }
+}

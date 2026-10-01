@@ -5,4 +5,13 @@ import {
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/json",
   "moonbitlang/core/string",
+  "moonbitlang/core/env",
 }
+
+import {
+  "moonbitlang/async/process",
+} for "wbtest"
+
+options(
+  "native-stub": [ "write_native.c" ],
+)

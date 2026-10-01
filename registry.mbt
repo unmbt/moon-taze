@@ -616,6 +616,17 @@ pub async fn check_manifest_filtered(
   exclude~ : Array[String],
   fetch~ : async (String) -> ModuleMetadata raise RegistryError,
 ) -> CheckPlan {
+  // Reparse authoritative bytes: callers can mutate Manifest.dependencies.
+  let checked_cwd = @env.current_dir().unwrap_or(".")
+  let parsed = parse_manifest(
+    manifest.source,
+    path=manifest.path,
+    module_name=manifest.module_name,
+  )
+  if has_error_diagnostics(parsed.diagnostics) {
+    return make_plan([], [], parsed.diagnostics)
+  }
+  let manifest = parsed.manifest.unwrap()
   if mode == UpdateMode::Newest || mode == UpdateMode::Next {
     let changes = manifest.dependencies.map(dependency => {
       let diag = diagnostic(
@@ -653,7 +664,7 @@ pub async fn check_manifest_filtered(
         ),
       )
     }
-    return { changes, diagnostics, has_errors: true, }
+    return make_plan([manifest], changes, diagnostics, cwd=checked_cwd)
   }
   let mut invalid_selector : String? = None
   for selector in include {
@@ -688,12 +699,12 @@ pub async fn check_manifest_filtered(
           ),
         )
       }
-      return { changes, diagnostics, has_errors: true, }
+      return make_plan([manifest], changes, diagnostics, cwd=checked_cwd)
     }
     None => ()
   }
   let changes : Array[DependencyChange] = []
-  let diagnostics : Array[Diagnostic] = []
+  let diagnostics : Array[Diagnostic] = parsed.diagnostics.copy()
   let fetched : Map[String, FetchResult] = Map([])
   for dependency in manifest.dependencies {
     if exclude.any(selector => {
@@ -749,11 +760,7 @@ pub async fn check_manifest_filtered(
       }
     }
   }
-  {
-    changes,
-    diagnostics,
-    has_errors: changes.any(change => change.status == ChangeStatus::Error),
-  }
+  make_plan([manifest], changes, diagnostics, cwd=checked_cwd)
 }
 
 ///|
@@ -785,31 +792,20 @@ pub async fn check_path_filtered(
         None,
         None,
       )
-      return { changes: [], diagnostics: [diag], has_errors: true, }
+      return make_plan([], [], [diag])
     }
   }
   let source = data.binary()
   let parsed = parse_manifest(source, path~, module_name~)
   match parsed.manifest {
-    None => { changes: [], diagnostics: parsed.diagnostics, has_errors: true, }
+    None => make_plan([], [], parsed.diagnostics)
     Some(manifest) => {
       if has_error_diagnostics(parsed.diagnostics) {
-        return {
-          changes: [],
-          diagnostics: parsed.diagnostics,
-          has_errors: true,
-        }
+        return make_plan([], [], parsed.diagnostics)
       }
-      let plan = check_manifest_filtered(manifest, mode~, include~, exclude~, fetch=module => {
+      check_manifest_filtered(manifest, mode~, include~, exclude~, fetch=module => {
         query_mooncakes(root="https://mooncakes.io", module)
       })
-      let all = parsed.diagnostics.copy()
-      all.append(plan.diagnostics)
-      {
-        changes: plan.changes,
-        diagnostics: all,
-        has_errors: plan.has_errors || has_error_diagnostics(parsed.diagnostics),
-      }
     }
   }
 }

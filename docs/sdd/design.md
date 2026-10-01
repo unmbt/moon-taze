@@ -1,6 +1,6 @@
 # 技术设计与接口契约
 
-版本：0.2。以下是目标设计，尚未实现。公开接口代码块是文档级声明草案；实施时需由当前 MoonBit 编译器核对，不表示仓库已有这些符号。阶段实现边界以 [推进路径](tasks.md#roadmap) 为准。
+版本：0.3。以下包含已实现的 P1a/P1b 与后续阶段目标。公开 Services/Callbacks 接口代码块仍是文档级草案；当前可用接口以生成的 `.mbti` 为准。阶段实现边界以 [推进路径](tasks.md#roadmap) 为准。
 
 <a id="d-01"></a>
 ## D-01 架构与实现边界
@@ -56,6 +56,8 @@ flowchart LR
 
 <a id="d-03"></a>
 ## D-03 数据模型与库 API
+
+P1b 实施说明：保留 `check_manifest[_filtered]`、`check_path[_filtered]`；`CheckPlan` 改为私有字段，只通过 `changes()`、`diagnostics()`、`has_errors()` 访问，数组及嵌套数组均复制。原始字节直接用于最终比较，当前无需摘要。新增 `recommended_selection()`、`selection(Array[(清单路径, 依赖名, 目标版本)])` 及 `apply(plan, selection)`。选择带计划身份，应用报告保留全部提交结果；本轮 IO 端口、批次组装及提交前钩子保持内部，不提前开放下文完整 Services/Callbacks。此为实验性 API 的显式迁移。
 
 | 类型 | 必需信息 / 不变量 |
 | --- | --- |
@@ -352,6 +354,8 @@ JSON 项目和依赖按路径、名称稳定排序，不随 `--sort` 改变；`-
 
 <a id="d-09"></a>
 ## D-09 应用计划与文件完整性
+
+P1b Native 实施：Windows 通过 `SetFileInformationByHandle(FileRenameInfoEx)` 同目录替换，显式复制 owner/group/DACL；没有 copy/delete 降级。POSIX 适配复制 owner/group/mode 及扩展权限元数据后 rename，尚未实机验收。临时内容写入前限制权限，写入后再次恢复权限并同步。锁和临时文件记录本次运行 ID/文件身份，清理时核对身份；遗留文件不按时间自动接管，未知临时文件保留。此处的权限保留不意味着保留所有文件属性、附加数据流或审计 SACL。
 
 应用输入必须来自本次 `check` 的有效计划，不支持反序列化任意 JSON 作为计划。逐项验证选择属于候选、没有重复实例、没有降级、没有重叠修改区间。空选择成功且零 IO 写入；整体检查错误仍不能通过空选择掩盖。
 

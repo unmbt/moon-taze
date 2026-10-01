@@ -3,8 +3,9 @@ fn usage() -> String {
   let text =
     #|moon-taze [default|major|minor|patch|latest|stable] [options]
     #|
-    #|Read-only P1a options: -C/--cwd, -a/--all, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, --version.
-    #|Write, workspace, recursive, JSON, cache, time and TUI options are not yet supported.
+    #|Options: -C/--cwd, -w/--write, -a/--all, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, --version.
+    #|Default is read-only. --write applies all recommended updates to one moon.mod.
+    #|Workspace, recursive, JSON, cache, time, verify and TUI options are not yet supported.
   text
 }
 
@@ -13,16 +14,13 @@ fn usage() -> String {
 extern "C" fn terminate_process(code : Int) = "exit"
 
 ///|
-#cfg(target="native")
-fn cli_error(message : String) -> Unit {
-  println(message)
-  terminate_process(2)
+priv suberror CliError {
+  CliError(String)
 }
 
 ///|
-#cfg(not(target="native"))
-fn cli_error(message : String) -> Unit {
-  fail(message)
+fn cli_error(message : String) -> Unit raise {
+  raise CliError(message)
 }
 
 ///|
@@ -196,19 +194,45 @@ fn append_selectors(target : Array[String], value : String) -> Unit {
 }
 
 ///|
-async fn main {
-  let args = @env.args()
+async fn run_cli(
+  args : Array[String],
+  fetch~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
+  emit~ : (String) -> Unit,
+) -> Int {
+  run_cli_inner(args, fetch~, emit~) catch {
+    CliError(message) => {
+      emit(message)
+      2
+    }
+    error =>
+      if @async.is_cancellation_error(error) {
+        emit("cancelled")
+        0
+      } else {
+        emit("error: \{error}")
+        2
+      }
+  }
+}
+
+///|
+async fn run_cli_inner(
+  args : Array[String],
+  fetch~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
+  emit~ : (String) -> Unit,
+) -> Int {
   if args.length() == 2 && (args[1] == "--help" || args[1] == "-h") {
-    println(usage())
-    return
+    emit(usage())
+    return 0
   }
   if args.length() == 2 && args[1] == "--version" {
-    println("moon-taze 0.1.0-p1a")
-    return
+    emit("moon-taze 0.1.0-p1b")
+    return 0
   }
   let mut mode = @taze.UpdateMode::Default
   let mut cwd = @env.current_dir().unwrap_or(".")
   let mut show_all = false
+  let mut write = false
   let include : Array[String] = []
   let exclude : Array[String] = []
   let mut mode_seen = false
@@ -233,14 +257,14 @@ async fn main {
       } else {
         append_selectors(exclude, args[index])
       }
-    } else if arg == "-w" ||
-      arg == "--write" ||
-      arg == "-r" ||
+    } else if arg == "-w" || arg == "--write" {
+      write = true
+    } else if arg == "-r" ||
       arg == "--recursive" ||
       arg == "--json" ||
       arg == "-I" ||
       arg == "--interactive" {
-      cli_error("unsupported option in P1a: \{arg}")
+      cli_error("unsupported option in P1b: \{arg}")
     } else if arg == "-C" || arg == "--cwd" {
       if index + 1 >= args.length() {
         cli_error("missing value for \{arg}")
@@ -270,7 +294,7 @@ async fn main {
       let old_path_slash = manifest_dir + "/moon.mod.json"
       if @fs.exists(old_path) || @fs.exists(old_path_slash) {
         cli_error("ambiguous_manifest: both moon.mod and moon.mod.json exist")
-        return
+        return 2
       }
       path
     }
@@ -282,63 +306,108 @@ async fn main {
           )
         None => cli_error("no_manifest: no moon.mod found from \{cwd}")
       }
-      return
+      return 2
     }
   }
   match find_workspace(cwd) {
     Some(workspace) => {
       cli_error("workspace_not_supported_yet: \{workspace}")
-      return
+      return 2
     }
     None => ()
   }
   let data = @fs.read_file(manifest_path) catch {
     error => {
       cli_error("manifest_read_error: \{error}")
-      return
+      return 2
     }
   }
   let source = data.binary()
   let module_name = module_name_from_source(source)
-  let plan = @taze.check_path_filtered(
-    manifest_path,
-    module_name~,
+  let parsed = @taze.parse_manifest(source, path=manifest_path, module_name~)
+  guard parsed.manifest is Some(manifest) else {
+    for diagnostic in parsed.diagnostics {
+      emit("error[\{diagnostic.code}]: \{diagnostic.message}")
+    }
+    return 2
+  }
+  let plan = @taze.check_manifest_filtered(
+    manifest,
     mode~,
     include~,
     exclude~,
+    fetch~,
   )
-  for diagnostic in plan.diagnostics {
+  for diagnostic in plan.diagnostics() {
     let level = match diagnostic.severity {
       Warning => "warning"
       Error => "error"
     }
-    println("\{level}[\{diagnostic.code}]: \{diagnostic.message}")
+    emit("\{level}[\{diagnostic.code}]: \{diagnostic.message}")
   }
-  for change in plan.changes {
+  for change in plan.changes() {
     match change.status {
       UpdateAvailable => {
         let target = change.target.unwrap_or("?")
         let mode_text = mode_name(change.mode)
-        println(
+        emit(
           "\{change.dependency.name} \{change.dependency.version} -> \{target} (\{mode_text})",
         )
       }
       UpToDate =>
         if show_all {
-          println(
+          emit(
             "\{change.dependency.name} \{change.dependency.version} up-to-date",
           )
         }
-      NoCandidate => println("\{change.dependency.name} no candidate")
+      NoCandidate => emit("\{change.dependency.name} no candidate")
       Skipped =>
         if show_all {
           let reason = change.reason.unwrap_or("filtered")
-          println("\{change.dependency.name} skipped (\{reason})")
+          emit("\{change.dependency.name} skipped (\{reason})")
         }
       Error => ()
     }
   }
-  if plan.has_errors {
+  if plan.has_errors() {
     cli_error("check failed")
+  }
+  if write {
+    let report = @taze.apply(plan, plan.recommended_selection())
+    for diagnostic in report.diagnostics {
+      emit("error[\{diagnostic.code}]: \{diagnostic.message}")
+    }
+    for file in report.files {
+      let status = match file.status {
+        Written => "written"
+        Unchanged => "unchanged"
+        Failed => "failed"
+        NotAttempted => "not_attempted"
+      }
+      emit(
+        "\{status}: \{file.manifest} (\{file.changed_dependencies} dependencies)",
+      )
+    }
+    let status = match report.status {
+      Succeeded => "succeeded"
+      Failed => "failed"
+      Partial => "partial"
+      Cancelled => "cancelled"
+    }
+    emit("apply \{status}: \{report.written_files()} files written")
+    return report.exit_code()
+  }
+  0
+}
+
+///|
+async fn main {
+  let code = run_cli(
+    @env.args(),
+    fetch=name => @taze.query_mooncakes(root="https://mooncakes.io", name),
+    emit=println,
+  )
+  if code != 0 {
+    terminate_process(code)
   }
 }

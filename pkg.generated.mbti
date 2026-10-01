@@ -7,6 +7,8 @@ import {
 }
 
 // Values
+pub async fn apply(CheckPlan, Selection) -> ApplyReport
+
 pub async fn check_manifest(Manifest, mode~ : UpdateMode, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
 
 pub async fn check_manifest_filtered(Manifest, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
@@ -40,6 +42,21 @@ pub suberror SemVerError {
 }
 
 // Types and methods
+pub struct ApplyReport {
+  status : ApplyStatus
+  files : Array[FileApplyResult]
+  diagnostics : Array[Diagnostic]
+}
+pub fn ApplyReport::exit_code(Self) -> Int
+pub fn ApplyReport::written_files(Self) -> Int
+
+pub(all) enum ApplyStatus {
+  Succeeded
+  Failed
+  Partial
+  Cancelled
+} derive(Eq, @debug.Debug)
+
 pub enum ChangeStatus {
   UpdateAvailable
   UpToDate
@@ -49,10 +66,13 @@ pub enum ChangeStatus {
 } derive(Eq, @debug.Debug)
 
 pub struct CheckPlan {
-  changes : Array[DependencyChange]
-  diagnostics : Array[Diagnostic]
-  has_errors : Bool
-} derive(Eq, @debug.Debug)
+  // private fields
+}
+pub fn CheckPlan::changes(Self) -> Array[DependencyChange]
+pub fn CheckPlan::diagnostics(Self) -> Array[Diagnostic]
+pub fn CheckPlan::has_errors(Self) -> Bool
+pub fn CheckPlan::recommended_selection(Self) -> Selection
+pub fn CheckPlan::selection(Self, Array[(String, String, String)]) -> Selection
 
 pub struct Clock {
   now_ms : () -> Int64
@@ -107,6 +127,19 @@ pub enum DiffKind {
   Prerelease
 } derive(Eq, @debug.Debug)
 
+pub struct FileApplyResult {
+  manifest : String
+  status : FileApplyStatus
+  changed_dependencies : Int
+}
+
+pub(all) enum FileApplyStatus {
+  Written
+  Unchanged
+  Failed
+  NotAttempted
+} derive(Eq, @debug.Debug)
+
 pub struct Manifest {
   module_name : String
   path : String
@@ -129,6 +162,10 @@ pub struct ParseResult {
 type RegistryOverview derive(@debug.Debug, @json.FromJson)
 
 type RegistryVersion derive(@debug.Debug, @json.FromJson)
+
+pub struct Selection {
+  // private fields
+}
 
 pub struct SemVer {
   major : Int

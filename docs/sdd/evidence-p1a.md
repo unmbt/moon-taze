@@ -15,6 +15,8 @@
 
 探针通过 `@fs.tmpdir` 创建隔离目录，只读/写临时目录；未读取或改写开发者项目文件。探针依赖 `moonbitlang/async@0.21.3`。
 
+2026-09-24 补充：这里的 `atomic_rename=true` 仅验证重命名到尚不存在的路径，不作为覆盖已有清单的证据；已有文件替换与权限保留由 [P1b 验收](evidence-p1b.md) 单独验证。
+
 ## T-02 / T-03 / T-04
 
 命令：`moon test --target native`

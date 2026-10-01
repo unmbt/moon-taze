@@ -1,0 +1,38 @@
+import {
+  "moonbitlang/async@0.21.3",
+  "moonbitlang/async@0.21.3/fs",
+  "moonbitlang/async@0.21.3/process",
+  "moonbitlang/core/env",
+}
+
+// Run after moon build --target native; optional first argument is the executable path.
+async fn main {
+  let args = @env.args()
+  let cwd = @env.current_dir().unwrap()
+  let executable = args.get(1).unwrap_or(cwd + "/_build/native/debug/build/cmd/main/main.exe")
+  let root = @fs.tmpdir(prefix="moon-taze-cli-smoke")
+  defer @fs.rmdir(root, recursive=true)
+  let path = root + "/moon.mod"
+  let source = b"name = \"demo/empty\"\r\n// preserve me"
+  @fs.write_file(path, source)
+  @fs.mkdir(root + "/.git")
+  let modified = @fs.mtime(path)
+  for (arguments, expected) in [
+    (["--help"], 0),
+    (["--version"], 0),
+    (["patch", "-C", root], 0),
+    (["patch", "-C", root, "-w"], 0),
+    (["--unknown"], 2),
+    (["-C", root, "-w", "--verify"], 2),
+  ] {
+    let (code, stdout, stderr) = @process.collect_output(executable, arguments, inherit_env=true)
+    if code != expected { fail("unexpected exit \{code}: \{stdout.text()} \{stderr.text()}") }
+  }
+  assert_eq(@fs.read_file(path).binary(), source)
+  assert_eq(@fs.mtime(path), modified)
+  @fs.write_file(path, b"name = \"demo/empty\"\nimport {\"demo/a@invalid\"}")
+  let (code, _, _) = @process.collect_output(executable, ["-C", root, "-w"], inherit_env=true)
+  assert_eq(code, 2)
+  assert_eq(@fs.readdir(root, include_hidden=true).length(), 2)
+  println("CLI process smoke: 7 exit-code cases passed; no network; no project writes")
+}

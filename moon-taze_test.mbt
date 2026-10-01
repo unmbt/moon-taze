@@ -240,11 +240,10 @@ test "manifest spans use UTF-8 byte offsets" {
 }
 
 ///|
-async test "fake registry deduplicates requests and retains errors" {
+async test "fake registry queries dependencies and retains errors" {
   let source : Bytes = @utf8.encode(
     (
       #|import {
-      #|  "demo/lib@1.2.0",
       #|  "demo/lib@1.2.0",
       #|  "demo/missing@1.0.0",
       #|}
@@ -282,12 +281,12 @@ async test "fake registry deduplicates requests and retains errors" {
       }
       let plan = @moon-taze.check_manifest(manifest, mode=Default, fetch~)
       assert_eq(calls.length(), 2)
-      assert_eq(plan.changes.length(), 2)
-      assert_true(plan.has_errors)
+      assert_eq(plan.changes().length(), 2)
+      assert_true(plan.has_errors())
       assert_true(
-        plan.changes[0].status is @moon-taze.ChangeStatus::UpdateAvailable,
+        plan.changes()[0].status is @moon-taze.ChangeStatus::UpdateAvailable,
       )
-      assert_true(plan.changes[1].status is @moon-taze.ChangeStatus::Error)
+      assert_true(plan.changes()[1].status is @moon-taze.ChangeStatus::Error)
     }
     None => fail("expected manifest")
   }
@@ -313,8 +312,8 @@ async test "fake registry rejects invalid metadata and reports no candidate" {
         mode=Default,
         fetch=invalid_fetch,
       )
-      assert_true(invalid_plan.has_errors)
-      assert_eq(invalid_plan.changes[0].reason, Some("invalid_metadata"))
+      assert_true(invalid_plan.has_errors())
+      assert_eq(invalid_plan.changes()[0].reason, Some("invalid_metadata"))
 
       async fn range_fetch(
         name : String,
@@ -340,9 +339,9 @@ async test "fake registry rejects invalid metadata and reports no candidate" {
         fetch=range_fetch,
       )
       assert_true(
-        no_candidate.changes[0].status is @moon-taze.ChangeStatus::NoCandidate,
+        no_candidate.changes()[0].status is @moon-taze.ChangeStatus::NoCandidate,
       )
-      assert_eq(no_candidate.has_errors, false)
+      assert_eq(no_candidate.has_errors(), false)
     }
     None => fail("expected manifest")
   }
@@ -382,7 +381,9 @@ async test "selectors skip dependencies before registry requests" {
   )
   assert_eq(calls.length(), 0)
   assert_true(
-    plan.changes.all(change => change.status is @moon-taze.ChangeStatus::Skipped),
+    plan
+    .changes()
+    .all(change => change.status is @moon-taze.ChangeStatus::Skipped),
   )
 }
 
@@ -413,7 +414,7 @@ async test "version selectors filter candidates after metadata fetch" {
     fetch~,
   )
   assert_eq(calls.length(), 1)
-  assert_eq(plan.changes[0].target, Some("1.4.0"))
+  assert_eq(plan.changes()[0].target, Some("1.4.0"))
   let blocked = @moon-taze.check_manifest_filtered(
     manifest,
     mode=Major,
@@ -421,5 +422,7 @@ async test "version selectors filter candidates after metadata fetch" {
     exclude=["demo/lib@1"],
     fetch~,
   )
-  assert_true(blocked.changes[0].status is @moon-taze.ChangeStatus::NoCandidate)
+  assert_true(
+    blocked.changes()[0].status is @moon-taze.ChangeStatus::NoCandidate,
+  )
 }
