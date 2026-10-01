@@ -135,6 +135,66 @@ pub async fn query_mooncakes(
 }
 
 ///|
+fn retryable_registry_error(error : RegistryError) -> Bool {
+  match error {
+    InvalidMetadata(_) => false
+    RequestFailed(message) =>
+      message == "request_timeout" ||
+      message.has_prefix("HTTP 408") ||
+      message.has_prefix("HTTP 429") ||
+      message.has_prefix("HTTP 5")
+  }
+}
+
+///|
+/// Query Mooncakes with bounded exponential retry for transient failures.
+/// The first request is immediate; retry number `n` waits `delay_ms * 2^n`.
+/// A zero retry count disables retries and is useful for deterministic CI.
+pub async fn query_mooncakes_retry(
+  root~ : String,
+  module : String,
+  retries~ : Int,
+  delay_ms~ : Int,
+) -> ModuleMetadata raise RegistryError {
+  let max_retries = if retries < 0 { 0 } else { retries }
+  let base_delay = if delay_ms < 0 { 0 } else { delay_ms }
+  query_mooncakes_retry_attempt(root~, module, max_retries, base_delay, 0)
+}
+
+///|
+async fn query_mooncakes_retry_attempt(
+  root~ : String,
+  module : String,
+  max_retries : Int,
+  base_delay : Int,
+  attempt : Int,
+) -> ModuleMetadata raise RegistryError {
+  query_mooncakes(root~, module) catch {
+    error => {
+      if !retryable_registry_error(error) || attempt >= max_retries {
+        raise error
+      }
+      let mut delay = base_delay
+      for _ in 0..<attempt {
+        delay = delay * 2
+      }
+      if delay > 0 {
+        @async.sleep(delay) catch {
+          _ => ()
+        }
+      }
+      query_mooncakes_retry_attempt(
+        root~,
+        module,
+        max_retries,
+        base_delay,
+        attempt + 1,
+      )
+    }
+  }
+}
+
+///|
 fn diff_kind(current : SemVer, target : SemVer) -> DiffKind {
   if current.major != target.major {
     Major
@@ -616,6 +676,66 @@ pub async fn check_manifest_filtered(
   exclude~ : Array[String],
   fetch~ : async (String) -> ModuleMetadata raise RegistryError,
 ) -> CheckPlan {
+  check_manifest_filtered_internal(
+    manifest,
+    mode~,
+    include~,
+    exclude~,
+    local_modules=Map([]),
+    fetched=Map([]),
+    fetch~,
+  )
+}
+
+///|
+/// Build one plan for several manifests while sharing registry requests.
+/// `local_modules` contains the complete workspace member-name set, including
+/// members that are outside the selected check range.
+pub async fn check_manifests_filtered(
+  manifests : Array[Manifest],
+  local_modules : Array[String],
+  mode~ : UpdateMode,
+  include~ : Array[String],
+  exclude~ : Array[String],
+  cwd? : String = @env.current_dir().unwrap_or("."),
+  fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+) -> CheckPlan {
+  let locals : Map[String, Unit] = Map([])
+  for name in local_modules {
+    locals[name] = ()
+  }
+  let fetched : Map[String, FetchResult] = Map([])
+  let snapshots : Array[Manifest] = []
+  let entries : Array[DependencyChange] = []
+  let diagnostics : Array[Diagnostic] = []
+  for manifest in manifests {
+    let item = check_manifest_filtered_internal(
+      manifest,
+      mode~,
+      include~,
+      exclude~,
+      local_modules=locals,
+      fetched~,
+      fetch~,
+    )
+    snapshots.append(item.snapshots)
+    entries.append(item.entries)
+    diagnostics.append(item.issues)
+  }
+  make_plan(snapshots, entries, diagnostics, cwd~)
+}
+
+///|
+/// Internal implementation shared by single-manifest and workspace checks.
+async fn check_manifest_filtered_internal(
+  manifest : Manifest,
+  mode~ : UpdateMode,
+  include~ : Array[String],
+  exclude~ : Array[String],
+  local_modules~ : Map[String, Unit],
+  fetched~ : Map[String, FetchResult],
+  fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+) -> CheckPlan {
   // Reparse authoritative bytes: callers can mutate Manifest.dependencies.
   let checked_cwd = @env.current_dir().unwrap_or(".")
   let parsed = parse_manifest(
@@ -705,7 +825,6 @@ pub async fn check_manifest_filtered(
   }
   let changes : Array[DependencyChange] = []
   let diagnostics : Array[Diagnostic] = parsed.diagnostics.copy()
-  let fetched : Map[String, FetchResult] = Map([])
   for dependency in manifest.dependencies {
     if exclude.any(selector => {
         !selector_has_version(selector) && filter_matches(dependency, selector)
@@ -716,6 +835,32 @@ pub async fn check_manifest_filtered(
     if !include.is_empty() &&
       !include.any(selector => filter_matches(dependency, selector)) {
       changes.push(skipped_change(dependency, mode, "not_included"))
+      continue
+    }
+    if local_modules.contains(dependency.name) {
+      let local_dependency = {
+        ..dependency,
+        source: DependencySource::LocalWorkspace,
+      }
+      let note = warning(
+        "local_workspace",
+        "dependency is provided by a member of the current workspace",
+        Some(dependency.manifest),
+        Some(dependency.name),
+        Some(dependency.span.line),
+        Some(dependency.span.column),
+      )
+      changes.push({
+        dependency: local_dependency,
+        mode,
+        status: Skipped,
+        target: None,
+        candidates: [],
+        diff: None,
+        reason: Some("local_workspace"),
+        diagnostics: [note],
+      })
+      diagnostics.push(note)
       continue
     }
     let fetched_value = match fetched.get(dependency.name) {

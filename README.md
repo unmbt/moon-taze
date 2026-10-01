@@ -1,6 +1,6 @@
 # unmbt/moon-taze
 
-检查 MoonBit 项目已有依赖的新版本，并按需更新 `moon.mod`。当前为 **P1b 实验版**：单模块 Native CLI，默认只读；Windows x86_64 已验证常规写回，Linux/macOS 尚未运行验收。
+检查 MoonBit 项目已有依赖的新版本，并按需更新 `moon.mod`。当前为 **P2 早期实验版**：已支持显式 `moon.work` 成员、递归发现、静态配置、跨模块本地依赖识别和 JSON v1 基础报告；Windows x86_64 已验证常规写回，Linux/macOS 尚未运行验收。
 
 ## 使用
 
@@ -15,9 +15,9 @@ moon run --target native cmd/main -- patch -C "path/to/project" --write
 - 模式：`default`、`minor`、`patch`、`major`、`latest`、`stable`，沿用 [版本策略](docs/sdd/design.md#d-05)。显示的是清单声明版本。
 - `-C/--cwd` 指定起点，向上寻找单模块清单；`-a/--all` 显示无更新和跳过的依赖。
 - `-n/--include`、`-x/--exclude` 过滤已有依赖；排除优先。`-l/--include-locked` 保留兼容用法，裸版本默认已参与检查。
-- `-w/--write` 应用所有推荐更新；不传时仅预览。不运行安装命令或 `moon fmt`，不会自动升级工具链。
+- `-w/--write` 应用所有推荐更新；不传时仅预览。`-r/--recursive` 扫描当前范围内的 `moon.mod`；工作区根目录按 `moon.work` 显式成员检查。`moon-taze.json` 可提供 `mode`、`recursive`、`all`、`include` 和 `exclude`，命令行值优先。不运行安装命令或 `moon fmt`，不会自动升级工具链。
 
-工作区、递归、配置文件、缓存、JSON、时间模式、TUI 和 `--verify` 尚未开放。旧 `moon.mod.json` 不自动迁移；发现作用域内 `moon.work` 会明确拒绝。
+当前缓存为单次进程内缓存，`--force` 会绕过并刷新；瞬时 Registry 错误支持有界重试和退避。`-w --verify` 会在实际写入后按模块运行 `moon check`，失败返回 2 并保留应用报告。持久化 TTL 缓存、时间模式和 TUI 仍未开放。旧 `moon.mod.json` 不自动迁移；工作区成员依赖标记为 `local_workspace`，不会访问 Registry。
 
 ## 写回与恢复
 

@@ -51,6 +51,21 @@ pub struct FileApplyResult {
 }
 
 ///|
+pub fn FileApplyResult::manifest(self : FileApplyResult) -> String {
+  self.manifest
+}
+
+///|
+pub fn FileApplyResult::status(self : FileApplyResult) -> FileApplyStatus {
+  self.status
+}
+
+///|
+pub fn FileApplyResult::changed_dependencies(self : FileApplyResult) -> Int {
+  self.changed_dependencies
+}
+
+///|
 /// Reports actual commits, including partial success. No implicit rollback occurs.
 pub struct ApplyReport {
   status : ApplyStatus
@@ -72,6 +87,23 @@ pub fn ApplyReport::exit_code(self : ApplyReport) -> Int {
   } else {
     0
   }
+}
+
+///|
+/// Return a detached file result list for machine-readable reporters.
+pub fn ApplyReport::files(self : ApplyReport) -> Array[FileApplyResult] {
+  self.files.copy()
+}
+
+///|
+/// Return the diagnostics collected during application.
+pub fn ApplyReport::diagnostics(self : ApplyReport) -> Array[Diagnostic] {
+  self.diagnostics.copy()
+}
+
+///|
+pub fn ApplyReport::status(self : ApplyReport) -> ApplyStatus {
+  self.status
 }
 
 ///|

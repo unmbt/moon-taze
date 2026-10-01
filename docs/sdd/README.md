@@ -1,6 +1,6 @@
 # moon-taze：规格驱动开发文档
 
-状态：P1a 只读闭环与 P1b 写回实现已核验；符号链接实机写入拒绝待权限环境复验，后续阶段待实施。核验日期：2026-09-24。文档版本：0.3。证据见 [P1a](evidence-p1a.md)、[P1b](evidence-p1b.md)。
+状态：P1a 只读闭环与 P1b 写回实现已核验；P2 的 T-06 工作区/递归/配置、T-07 有界重试与进程内缓存、T-08 JSON v1、T-12 非交互 verify 已接入。持久化 TTL 缓存、完整限流/Retry-After 和平台验收仍待实施。符号链接实机写入拒绝待权限环境复验。核验日期：2026-10-01。文档版本：0.3。证据见 [P1a](evidence-p1a.md)、[P1b](evidence-p1b.md)、[P2 首轮](evidence-p2.md)。
 
 本项目将 taze 的依赖检查与更新体验适配到 MoonBit：读取项目已有依赖，从 Mooncakes 查询版本，生成更新计划，由用户预览或选择后写回。这里的 SDD 指 **Specification-Driven Development（规格驱动开发）**；技术设计是其中一部分。
 

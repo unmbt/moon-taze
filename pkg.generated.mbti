@@ -13,17 +13,27 @@ pub async fn check_manifest(Manifest, mode~ : UpdateMode, fetch~ : async (String
 
 pub async fn check_manifest_filtered(Manifest, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
 
+pub async fn check_manifests_filtered(Array[Manifest], Array[String], mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], cwd? : String, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+
 pub async fn check_path(String, module_name~ : String, mode~ : UpdateMode) -> CheckPlan
 
 pub async fn check_path_filtered(String, module_name~ : String, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String]) -> CheckPlan
 
 pub fn choose_version(String, Array[String], mode~ : UpdateMode) -> String? raise SemVerError
 
+pub fn module_name_from_source(Bytes) -> String
+
 pub fn parse_manifest(Bytes, path~ : String, module_name~ : String) -> ParseResult
 
 pub fn parse_version(String) -> SemVer raise SemVerError
 
 pub async fn query_mooncakes(root~ : String, String) -> ModuleMetadata raise RegistryError
+
+pub async fn query_mooncakes_retry(root~ : String, String, retries~ : Int, delay_ms~ : Int) -> ModuleMetadata raise RegistryError
+
+pub async fn read_config(String) -> ConfigResult
+
+pub async fn read_workspace(String) -> WorkspaceParseResult
 
 pub fn registry_request_failed(String) -> RegistryError
 
@@ -47,7 +57,10 @@ pub struct ApplyReport {
   files : Array[FileApplyResult]
   diagnostics : Array[Diagnostic]
 }
+pub fn ApplyReport::diagnostics(Self) -> Array[Diagnostic]
 pub fn ApplyReport::exit_code(Self) -> Int
+pub fn ApplyReport::files(Self) -> Array[FileApplyResult]
+pub fn ApplyReport::status(Self) -> ApplyStatus
 pub fn ApplyReport::written_files(Self) -> Int
 
 pub(all) enum ApplyStatus {
@@ -78,6 +91,22 @@ pub struct Clock {
   now_ms : () -> Int64
 }
 pub fn Clock::Clock(() -> Int64) -> Self
+
+pub struct Config {
+  mode : String?
+  recursive : Bool?
+  all : Bool?
+  include : Array[String]?
+  exclude : Array[String]?
+  ignoreOtherWorkspaces : Bool?
+  retry : Int?
+  force : Bool?
+} derive(Eq, @debug.Debug, @json.FromJson)
+
+pub struct ConfigResult {
+  config : Config?
+  diagnostics : Array[Diagnostic]
+} derive(Eq, @debug.Debug)
 
 pub struct Dependency {
   module : String
@@ -132,6 +161,9 @@ pub struct FileApplyResult {
   status : FileApplyStatus
   changed_dependencies : Int
 }
+pub fn FileApplyResult::changed_dependencies(Self) -> Int
+pub fn FileApplyResult::manifest(Self) -> String
+pub fn FileApplyResult::status(Self) -> FileApplyStatus
 
 pub(all) enum FileApplyStatus {
   Written
@@ -202,6 +234,24 @@ pub struct VersionMetadata {
   published_at : Int64?
 } derive(Eq, @debug.Debug)
 pub fn VersionMetadata::VersionMetadata(String, Bool, String?, Int64?) -> Self
+
+pub struct Workspace {
+  root : String
+  path : String
+  source : Bytes
+  members : Array[WorkspaceMember]
+} derive(Eq, @debug.Debug)
+
+pub struct WorkspaceMember {
+  directory : String
+  manifest : Manifest
+  module_name : String
+} derive(Eq, @debug.Debug)
+
+pub struct WorkspaceParseResult {
+  workspace : Workspace?
+  diagnostics : Array[Diagnostic]
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 

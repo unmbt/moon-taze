@@ -23,7 +23,7 @@ async fn main {
     (["patch", "-C", root], 0),
     (["patch", "-C", root, "-w"], 0),
     (["--unknown"], 2),
-    (["-C", root, "-w", "--verify"], 2),
+    (["-C", root, "-w", "--verify"], 0),
   ] {
     let (code, stdout, stderr) = @process.collect_output(executable, arguments, inherit_env=true)
     if code != expected { fail("unexpected exit \{code}: \{stdout.text()} \{stderr.text()}") }

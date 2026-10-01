@@ -29,6 +29,54 @@ fn is_ident_byte(value : Byte) -> Bool {
 }
 
 ///|
+/// Extract the module name from a `moon.mod` snapshot.
+///
+/// This intentionally accepts only the scalar `name = "..."` declaration;
+/// the manifest parser remains authoritative for dependency syntax.
+pub fn module_name_from_source(source : Bytes) -> String {
+  let text = if source.length() >= 3 &&
+    source[0] == 0xef &&
+    source[1] == 0xbb &&
+    source[2] == 0xbf {
+    @utf8.decode_lossy(source[3:])
+  } else {
+    @utf8.decode_lossy(source)
+  }
+  for line in text.split("\n") {
+    let line = line.trim().to_owned()
+    if line.has_prefix("name") &&
+      (
+        line.length() == 4 ||
+        line[4] == ' ' ||
+        line[4] == '\t' ||
+        line[4] == '='
+      ) {
+      match line.split_once("=") {
+        Some((_, right)) => {
+          let value = right.trim()
+          if value.length() >= 2 && value[0] == '"' {
+            let mut index = 1
+            let mut escaped = false
+            while index < value.length() {
+              if escaped {
+                escaped = false
+              } else if value[index] == '\\' {
+                escaped = true
+              } else if value[index] == '"' {
+                return value[1:index].to_owned()
+              }
+              index += 1
+            }
+          }
+        }
+        None => ()
+      }
+    }
+  }
+  ""
+}
+
+///|
 fn skip_space(source : Bytes, start : Int) -> Int {
   let mut index = start
   while index < source.length() && is_space_byte(source[index]) {

@@ -388,6 +388,71 @@ async test "selectors skip dependencies before registry requests" {
 }
 
 ///|
+async test "workspace members are local and shared registry requests are deduplicated" {
+  let root = @fs.tmpdir(prefix="moon-taze-workspace")
+  defer @fs.rmdir(root, recursive=true)
+  let work = root + "/moon.work"
+  @fs.write_file(
+    work,
+    @utf8.encode(
+      (
+        #|// the string in this comment is not a member: "ignored"
+        #|workspace {
+        #|  "apps/a",
+        #|  "libs/b",
+        #|}
+      ),
+    ),
+  )
+  @fs.mkdir(root + "/apps/a", recursive=true)
+  @fs.mkdir(root + "/libs/b", recursive=true)
+  @fs.write_file(
+    root + "/apps/a/moon.mod",
+    @utf8.encode(
+      "name = \"demo/a\"\nimport { \"demo/b@1.0.0\", \"demo/ext@1.0.0\" }",
+    ),
+  )
+  @fs.write_file(
+    root + "/libs/b/moon.mod",
+    @utf8.encode("name = \"demo/b\"\nimport { \"demo/ext@1.0.0\" }"),
+  )
+  let parsed = @moon-taze.read_workspace(work)
+  assert_true(parsed.workspace is Some(_))
+  let workspace = parsed.workspace.unwrap()
+  assert_eq(workspace.members.map(member => member.module_name), [
+    "demo/a", "demo/b",
+  ])
+  let calls : Array[String] = []
+  async fn fetch(
+    name : String,
+  ) -> @moon-taze.ModuleMetadata raise @moon-taze.RegistryError {
+    calls.push(name)
+    @moon-taze.ModuleMetadata::ModuleMetadata(name, Some("1.1.0"), [
+      @moon-taze.VersionMetadata::VersionMetadata("1.0.0", false, None, None),
+      @moon-taze.VersionMetadata::VersionMetadata("1.1.0", false, None, None),
+    ])
+  }
+  let plan = @moon-taze.check_manifests_filtered(
+    workspace.members.map(member => member.manifest),
+    ["demo/a", "demo/b"],
+    mode=Default,
+    include=[],
+    exclude=[],
+    cwd=root,
+    fetch~,
+  )
+  assert_eq(calls, ["demo/ext"])
+  let changes = plan.changes()
+  assert_true(
+    changes.any(change => {
+      change.dependency.name == "demo/b" &&
+      change.dependency.source is @moon-taze.DependencySource::LocalWorkspace
+    }),
+  )
+  assert_true(changes.any(change => change.reason == Some("local_workspace")))
+}
+
+///|
 async test "version selectors filter candidates after metadata fetch" {
   let source : Bytes = @utf8.encode("import { \"demo/lib@1.2.0\" }")
   let manifest = @moon-taze.parse_manifest(

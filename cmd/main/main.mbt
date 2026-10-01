@@ -3,9 +3,9 @@ fn usage() -> String {
   let text =
     #|moon-taze [default|major|minor|patch|latest|stable] [options]
     #|
-    #|Options: -C/--cwd, -w/--write, -a/--all, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, --version.
+    #|Options: -C/--cwd, -w/--write, -a/--all, -r/--recursive, --json, --verify, --retry, --no-retry, -f/--force, --no-force, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, --version.
     #|Default is read-only. --write applies all recommended updates to one moon.mod.
-    #|Workspace, recursive, JSON, cache, time, verify and TUI options are not yet supported.
+    #|Workspace members, recursive checks, JSON and non-interactive verify are supported.
   text
 }
 
@@ -82,6 +82,11 @@ async fn find_manifest(start : String) -> String? {
   // parent moon.mod cannot silently win over the nearest unsupported project.
   if @fs.exists(start + "\\moon.mod.json") ||
     @fs.exists(start + "/moon.mod.json") {
+    return None
+  }
+  // A workspace root is its own discovery boundary even when it does not
+  // contain a root moon.mod; its explicit members become the check scope.
+  if @fs.exists(start + "\\moon.work") || @fs.exists(start + "/moon.work") {
     return None
   }
   if has_git_boundary(start) {
@@ -194,22 +199,361 @@ fn append_selectors(target : Array[String], value : String) -> Unit {
 }
 
 ///|
+fn json_text(value : String) -> Json {
+  Json::string(value)
+}
+
+///|
+fn json_optional(value : String?) -> Json {
+  match value {
+    Some(value) => json_text(value)
+    None => Json::null()
+  }
+}
+
+///|
+fn json_diagnostic(value : @taze.Diagnostic) -> Json {
+  let object : Map[String, Json] = Map([])
+  object["severity"] = json_text(
+    match value.severity {
+      Warning => "warning"
+      Error => "error"
+    },
+  )
+  object["code"] = json_text(value.code)
+  object["message"] = json_text(value.message)
+  object["manifest"] = json_optional(value.manifest)
+  object["dependency"] = json_optional(value.dependency)
+  object["line"] = match value.line {
+    Some(value) => Json::number(value.to_double())
+    None => Json::null()
+  }
+  object["column"] = match value.column {
+    Some(value) => Json::number(value.to_double())
+    None => Json::null()
+  }
+  Json::object(object)
+}
+
+///|
+fn json_change(value : @taze.DependencyChange) -> Json {
+  let object : Map[String, Json] = Map([])
+  object["name"] = json_text(value.dependency.name)
+  object["current"] = json_text(value.dependency.version)
+  object["target"] = json_optional(value.target)
+  object["mode"] = json_text(mode_name(value.mode))
+  object["status"] = json_text(
+    match value.status {
+      UpdateAvailable => "update_available"
+      UpToDate => "up_to_date"
+      NoCandidate => "no_candidate"
+      Skipped => "skipped"
+      Error => "error"
+    },
+  )
+  object["diff"] = match value.diff {
+    Some(Major) => json_text("major")
+    Some(Minor) => json_text("minor")
+    Some(Patch) => json_text("patch")
+    Some(Prerelease) => json_text("prerelease")
+    None => Json::null()
+  }
+  object["reason"] = json_optional(value.reason)
+  object["selected"] = Json::boolean(false)
+  object["applied"] = Json::boolean(false)
+  object["currentPublishedAt"] = Json::null()
+  object["targetPublishedAt"] = Json::null()
+  object["timeDiffSeconds"] = Json::null()
+  Json::object(object)
+}
+
+///|
+fn json_apply_status(value : @taze.ApplyStatus) -> String {
+  match value {
+    Succeeded => "succeeded"
+    Failed => "failed"
+    Partial => "partial"
+    Cancelled => "cancelled"
+  }
+}
+
+///|
+fn json_file_status(value : @taze.FileApplyStatus) -> String {
+  match value {
+    Written => "written"
+    Unchanged => "unchanged"
+    Failed => "failed"
+    NotAttempted => "not_attempted"
+  }
+}
+
+///|
+struct VerificationResult {
+  path : String
+  passed : Bool
+  exit_code : Int
+}
+
+///|
+fn render_json(
+  plan : @taze.CheckPlan,
+  mode : @taze.UpdateMode,
+  report : @taze.ApplyReport?,
+  verification : Array[VerificationResult],
+) -> String {
+  let changes = plan.changes()
+  let project_paths : Array[String] = []
+  for change in changes {
+    if !project_paths.contains(change.dependency.manifest) {
+      project_paths.push(change.dependency.manifest)
+    }
+  }
+  project_paths.sort()
+  let projects : Array[Json] = []
+  for path in project_paths {
+    let dependencies = changes
+      .filter(change => change.dependency.manifest == path)
+      .map(json_change)
+    let object : Map[String, Json] = Map([])
+    object["manifest"] = json_text(path)
+    let mut module_name = ""
+    for change in changes {
+      if change.dependency.manifest == path {
+        module_name = change.dependency.module
+        break
+      }
+    }
+    object["module"] = json_text(module_name)
+    object["dependencies"] = Json::array(dependencies)
+    projects.push(Json::object(object))
+  }
+  let mut updates = 0
+  let mut skipped = 0
+  for change in changes {
+    match change.status {
+      UpdateAvailable => updates += 1
+      Skipped => skipped += 1
+      _ => ()
+    }
+  }
+  let mut errors = 0
+  for item in plan.diagnostics() {
+    match item.severity {
+      Error => errors += 1
+      _ => ()
+    }
+  }
+  let summary : Map[String, Json] = Map([])
+  summary["checked"] = Json::number((changes.length() - skipped).to_double())
+  summary["updates"] = Json::number(updates.to_double())
+  summary["skipped"] = Json::number(skipped.to_double())
+  summary["errors"] = Json::number(errors.to_double())
+  summary["writtenFiles"] = Json::number(
+    match report {
+      Some(value) => value.written_files().to_double()
+      None => 0.0
+    },
+  )
+  let diagnostic_values = plan.diagnostics()
+  match report {
+    Some(value) => diagnostic_values.append(value.diagnostics())
+    None => ()
+  }
+  let diagnostics = diagnostic_values.map(json_diagnostic)
+  let apply : Map[String, Json] = Map([])
+  apply["status"] = match report {
+    Some(value) => json_text(json_apply_status(value.status()))
+    None => json_text("not_requested")
+  }
+  let files = match report {
+    Some(value) =>
+      value
+      .files()
+      .map(file => {
+        let item : Map[String, Json] = Map([])
+        item["manifest"] = json_text(file.manifest())
+        item["status"] = json_text(json_file_status(file.status()))
+        item["changedDependencies"] = Json::number(
+          file.changed_dependencies().to_double(),
+        )
+        Json::object(item)
+      })
+    None => []
+  }
+  apply["files"] = Json::array(files)
+  apply["verification"] = Json::array(
+    verification.map(value => {
+      let item : Map[String, Json] = Map([])
+      item["path"] = json_text(value.path)
+      item["status"] = json_text(if value.passed { "passed" } else { "failed" })
+      item["exitCode"] = Json::number(value.exit_code.to_double())
+      Json::object(item)
+    }),
+  )
+  let root : Map[String, Json] = Map([])
+  root["schemaVersion"] = Json::number(1.0)
+  root["mode"] = json_text(mode_name(mode))
+  let apply_error = match report {
+    Some(value) =>
+      match value.status() {
+        Succeeded => false
+        _ => true
+      }
+    None => false
+  }
+  root["status"] = json_text(
+    if errors > 0 || apply_error || verification.any(item => !item.passed) {
+      "error"
+    } else {
+      "ok"
+    },
+  )
+  root["projects"] = Json::array(projects)
+  root["summary"] = Json::object(summary)
+  root["diagnostics"] = Json::array(diagnostics)
+  root["apply"] = Json::object(apply)
+  root["exitCode"] = Json::number(
+    match report {
+      Some(value) =>
+        if value.exit_code() != 0 || verification.any(item => !item.passed) {
+          2.0
+        } else {
+          0.0
+        }
+      None => if errors > 0 { 2.0 } else { 0.0 }
+    },
+  )
+  Json::object(root).stringify()
+}
+
+///|
+fn render_cli_error_json(message : String) -> String {
+  let root : Map[String, Json] = Map([])
+  root["schemaVersion"] = Json::number(1.0)
+  root["mode"] = Json::null()
+  root["status"] = json_text("error")
+  root["projects"] = Json::array([])
+  let summary : Map[String, Json] = Map([])
+  summary["checked"] = Json::number(0.0)
+  summary["updates"] = Json::number(0.0)
+  summary["skipped"] = Json::number(0.0)
+  summary["errors"] = Json::number(1.0)
+  summary["writtenFiles"] = Json::number(0.0)
+  root["summary"] = Json::object(summary)
+  let diagnostic : Map[String, Json] = Map([])
+  diagnostic["severity"] = json_text("error")
+  diagnostic["code"] = json_text("cli_error")
+  diagnostic["message"] = json_text(message)
+  diagnostic["manifest"] = Json::null()
+  diagnostic["dependency"] = Json::null()
+  diagnostic["line"] = Json::null()
+  diagnostic["column"] = Json::null()
+  root["diagnostics"] = Json::array([Json::object(diagnostic)])
+  let apply : Map[String, Json] = Map([])
+  apply["status"] = json_text("not_requested")
+  apply["files"] = Json::array([])
+  apply["verification"] = Json::array([])
+  root["apply"] = Json::object(apply)
+  root["exitCode"] = Json::number(2.0)
+  Json::object(root).stringify()
+}
+
+///|
+fn retryable_cli_registry_error(error : @taze.RegistryError) -> Bool {
+  match error {
+    @taze.RegistryError::InvalidMetadata(_) => false
+    @taze.RegistryError::RequestFailed(message) =>
+      message == "request_timeout" ||
+      message.has_prefix("HTTP 408") ||
+      message.has_prefix("HTTP 429") ||
+      message.has_prefix("HTTP 5")
+  }
+}
+
+///|
+async fn verify_directory(path : String, emit~ : (String) -> Unit) -> Bool {
+  let (code, _, _) = @process.collect_output("moon", ["check"], cwd=path) catch {
+    error => {
+      emit("error[moon_unavailable]: {error}")
+      return false
+    }
+  }
+  if code == 0 {
+    true
+  } else {
+    emit("error[verification_failed]: moon check exited {code} in {path}")
+    false
+  }
+}
+
+///|
+async fn fetch_with_retries(
+  fetch~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
+  name : String,
+  retries : Int,
+  delay_ms? : Int = 0,
+) -> @taze.ModuleMetadata raise @taze.RegistryError {
+  fetch_with_retries_attempt(fetch~, name, retries, delay_ms, 0)
+}
+
+///|
+async fn fetch_with_retries_attempt(
+  fetch~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
+  name : String,
+  retries : Int,
+  delay_ms : Int,
+  attempt : Int,
+) -> @taze.ModuleMetadata raise @taze.RegistryError {
+  fetch(name) catch {
+    error => {
+      if !retryable_cli_registry_error(error) || attempt >= retries {
+        raise error
+      }
+      if delay_ms > 0 {
+        let mut delay = delay_ms
+        for _ in 0..<attempt {
+          delay = delay * 2
+        }
+        @async.sleep(delay) catch {
+          _ => ()
+        }
+      }
+      fetch_with_retries_attempt(fetch~, name, retries, delay_ms, attempt + 1)
+    }
+  }
+}
+
+///|
 async fn run_cli(
   args : Array[String],
   fetch~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
   emit~ : (String) -> Unit,
+  cache? : Map[String, @taze.ModuleMetadata] = Map([]),
+  retry_delay_ms? : Int = 0,
 ) -> Int {
-  run_cli_inner(args, fetch~, emit~) catch {
+  run_cli_inner(args, fetch~, emit~, cache~, retry_delay_ms) catch {
     CliError(message) => {
-      emit(message)
+      if args.any(item => item == "--json") {
+        emit(render_cli_error_json(message))
+      } else {
+        emit(message)
+      }
       2
     }
     error =>
       if @async.is_cancellation_error(error) {
-        emit("cancelled")
+        if args.any(item => item == "--json") {
+          emit(render_cli_error_json("cancelled"))
+        } else {
+          emit("cancelled")
+        }
         0
       } else {
-        emit("error: \{error}")
+        if args.any(item => item == "--json") {
+          emit(render_cli_error_json("\{error}"))
+        } else {
+          emit("error: \{error}")
+        }
         2
       }
   }
@@ -220,19 +564,30 @@ async fn run_cli_inner(
   args : Array[String],
   fetch~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
   emit~ : (String) -> Unit,
+  cache~ : Map[String, @taze.ModuleMetadata],
+  retry_delay_ms : Int,
 ) -> Int {
   if args.length() == 2 && (args[1] == "--help" || args[1] == "-h") {
     emit(usage())
     return 0
   }
   if args.length() == 2 && args[1] == "--version" {
-    emit("moon-taze 0.1.0-p1b")
+    emit("moon-taze 0.1.0-p2")
     return 0
   }
   let mut mode = @taze.UpdateMode::Default
   let mut cwd = @env.current_dir().unwrap_or(".")
   let mut show_all = false
   let mut write = false
+  let mut json_output = false
+  let mut verify = false
+  let mut retry_count = 4
+  let mut retry_seen = false
+  let mut force = false
+  let mut force_seen = false
+  let mut recursive = false
+  let mut recursive_seen = false
+  let mut all_seen = false
   let include : Array[String] = []
   let exclude : Array[String] = []
   let mut mode_seen = false
@@ -241,6 +596,7 @@ async fn run_cli_inner(
     let arg = args[index]
     if arg == "-a" || arg == "--all" {
       show_all = true
+      all_seen = true
     } else if arg == "-l" || arg == "--include-locked" {
       // Bare versions are already part of the read-only P1a input.
       ()
@@ -259,11 +615,33 @@ async fn run_cli_inner(
       }
     } else if arg == "-w" || arg == "--write" {
       write = true
-    } else if arg == "-r" ||
-      arg == "--recursive" ||
-      arg == "--json" ||
-      arg == "-I" ||
-      arg == "--interactive" {
+    } else if arg == "-r" || arg == "--recursive" {
+      recursive = true
+      recursive_seen = true
+    } else if arg == "--json" {
+      json_output = true
+    } else if arg == "--verify" {
+      verify = true
+    } else if arg == "--force" || arg == "-f" {
+      force = true
+      force_seen = true
+    } else if arg == "--no-force" {
+      force = false
+      force_seen = true
+    } else if arg == "--no-retry" {
+      retry_count = 0
+      retry_seen = true
+    } else if arg == "--retry" {
+      if index + 1 >= args.length() {
+        cli_error("missing value for --retry")
+      }
+      index += 1
+      retry_count = @string.parse_int(args[index]) catch { _ => -1 }
+      if retry_count < 0 {
+        cli_error("invalid retry count: \{args[index]}")
+      }
+      retry_seen = true
+    } else if arg == "-I" || arg == "--interactive" {
       cli_error("unsupported option in P1b: \{arg}")
     } else if arg == "-C" || arg == "--cwd" {
       if index + 1 >= args.length() {
@@ -298,54 +676,235 @@ async fn run_cli_inner(
       }
       path
     }
-    None => {
-      match find_legacy_manifest(cwd) {
-        Some(path) =>
-          cli_error(
-            "unsupported_manifest: moon.mod.json is not supported at \{path}",
-          )
-        None => cli_error("no_manifest: no moon.mod found from \{cwd}")
+    None =>
+      match find_workspace(cwd) {
+        Some(workspace) => workspace + "/moon.work"
+        None =>
+          match find_legacy_manifest(cwd) {
+            Some(path) => {
+              cli_error(
+                "unsupported_manifest: moon.mod.json is not supported at \{path}",
+              )
+              ""
+            }
+            None => {
+              cli_error("no_manifest: no moon.mod found from \{cwd}")
+              ""
+            }
+          }
       }
-      return 2
+  }
+  let workspace_path = find_workspace(cwd)
+  let config_root = match workspace_path {
+    Some(path) => parent_path(path).unwrap_or(cwd)
+    None => parent_path(manifest_path).unwrap_or(cwd)
+  }
+  let config_path = config_root + "/moon-taze.json"
+  if @fs.exists(config_path) {
+    let loaded = @taze.read_config(config_path)
+    if !json_output {
+      for issue in loaded.diagnostics {
+        emit("error[\{issue.code}]: \{issue.message}")
+      }
+    }
+    if loaded.config is None {
+      cli_error("invalid_config")
+    }
+    let config = loaded.config.unwrap()
+    match config.mode {
+      Some(value) =>
+        if !mode_seen {
+          match parse_mode(value) {
+            Some(parsed) => mode = parsed
+            None => cli_error("invalid_config: unknown mode {value}")
+          }
+        }
+      None => ()
+    }
+    if !recursive_seen {
+      match config.recursive {
+        Some(value) => recursive = value
+        None => ()
+      }
+    }
+    if !all_seen {
+      match config.all {
+        Some(value) => show_all = value
+        None => ()
+      }
+    }
+    if include.is_empty() {
+      match config.include {
+        Some(values) => include.append(values)
+        None => ()
+      }
+    }
+    if exclude.is_empty() {
+      match config.exclude {
+        Some(values) => exclude.append(values)
+        None => ()
+      }
+    }
+    if !retry_seen {
+      match config.retry {
+        Some(value) => {
+          if value < 0 {
+            cli_error("invalid_config: retry must be non-negative")
+          }
+          retry_count = value
+        }
+        None => ()
+      }
+    }
+    if !force_seen {
+      match config.force {
+        Some(value) => force = value
+        None => ()
+      }
     }
   }
-  match find_workspace(cwd) {
-    Some(workspace) => {
-      cli_error("workspace_not_supported_yet: \{workspace}")
-      return 2
+  if verify && !write {
+    cli_error("invalid_option: --verify requires --write")
+  }
+  let manifests : Array[@taze.Manifest] = []
+  let local_modules : Array[String] = []
+  let mut workspace_root : String? = None
+  match workspace_path {
+    Some(path) => {
+      let parsed_workspace = @taze.read_workspace(path)
+      if !json_output {
+        for diagnostic in parsed_workspace.diagnostics {
+          let level = match diagnostic.severity {
+            Warning => "warning"
+            Error => "error"
+          }
+          emit("\{level}[\{diagnostic.code}]: \{diagnostic.message}")
+        }
+      }
+      if parsed_workspace.workspace is None {
+        cli_error("invalid_workspace")
+      }
+      let workspace = parsed_workspace.workspace.unwrap()
+      workspace_root = Some(workspace.root)
+      for member in workspace.members {
+        local_modules.push(member.module_name)
+      }
+      // At the workspace root, explicit members define the check scope. From
+      // inside a member, keep the usual nearest-module behavior.
+      let normalized_cwd = @fs.realpath(cwd) catch { _ => cwd }
+      let normalized_root = @fs.realpath(workspace.root) catch {
+        _ => workspace.root
+      }
+      if normalized_cwd == normalized_root {
+        for member in workspace.members {
+          manifests.push(member.manifest)
+        }
+      }
     }
     None => ()
   }
-  let data = @fs.read_file(manifest_path) catch {
-    error => {
-      cli_error("manifest_read_error: \{error}")
+  if manifests.is_empty() {
+    let data = @fs.read_file(manifest_path) catch {
+      error => {
+        cli_error("manifest_read_error: \{error}")
+        return 2
+      }
+    }
+    let source = data.binary()
+    let module_name = module_name_from_source(source)
+    let parsed = @taze.parse_manifest(source, path=manifest_path, module_name~)
+    guard parsed.manifest is Some(manifest) else {
+      if !json_output {
+        for diagnostic in parsed.diagnostics {
+          emit("error[\{diagnostic.code}]: \{diagnostic.message}")
+        }
+      }
       return 2
     }
+    manifests.push(manifest)
   }
-  let source = data.binary()
-  let module_name = module_name_from_source(source)
-  let parsed = @taze.parse_manifest(source, path=manifest_path, module_name~)
-  guard parsed.manifest is Some(manifest) else {
-    for diagnostic in parsed.diagnostics {
-      emit("error[\{diagnostic.code}]: \{diagnostic.message}")
+  if recursive {
+    let scan_root = match workspace_root {
+      Some(value) => value
+      None => cwd
     }
-    return 2
+    let discovered : Array[String] = []
+    @fs.walk(
+      scan_root,
+      async fn(directory, _) {
+        if directory.contains("/_build") ||
+          directory.contains("\\_build") ||
+          directory.contains("/.git") ||
+          directory.contains("\\.git") ||
+          directory.contains("/.mooncakes") ||
+          directory.contains("\\.mooncakes") {
+          ()
+        } else {
+          let candidate = directory + "/moon.mod"
+          if @fs.exists(candidate) {
+            discovered.push(candidate)
+          }
+        }
+      },
+      max_concurrency=1,
+    )
+    discovered.sort()
+    for path in discovered {
+      if !manifests.any(item => item.path == path) {
+        let data = @fs.read_file(path) catch { _ => continue }
+        let source = data.binary()
+        let module_name = module_name_from_source(source)
+        let parsed = @taze.parse_manifest(source, path~, module_name~)
+        match parsed.manifest {
+          Some(manifest) => manifests.push(manifest)
+          None =>
+            if !json_output {
+              for diagnostic in parsed.diagnostics {
+                emit("error[\{diagnostic.code}]: \{diagnostic.message}")
+              }
+            }
+        }
+      }
+    }
   }
-  let plan = @taze.check_manifest_filtered(
-    manifest,
+  let effective_fetch : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError = name => {
+    if !force {
+      match cache.get(name) {
+        Some(value) => return value
+        None => ()
+      }
+    }
+    let value = fetch_with_retries(
+      fetch~,
+      name,
+      retry_count,
+      delay_ms=retry_delay_ms,
+    )
+    cache[name] = value
+    value
+  }
+  let plan = @taze.check_manifests_filtered(
+    manifests,
+    local_modules,
     mode~,
     include~,
     exclude~,
-    fetch~,
+    cwd~,
+    fetch=effective_fetch,
   )
-  for diagnostic in plan.diagnostics() {
-    let level = match diagnostic.severity {
-      Warning => "warning"
-      Error => "error"
+  if !json_output {
+    for diagnostic in plan.diagnostics() {
+      let level = match diagnostic.severity {
+        Warning => "warning"
+        Error => "error"
+      }
+      emit("\{level}[\{diagnostic.code}]: \{diagnostic.message}")
     }
-    emit("\{level}[\{diagnostic.code}]: \{diagnostic.message}")
   }
   for change in plan.changes() {
+    if json_output {
+      continue
+    }
     match change.status {
       UpdateAvailable => {
         let target = change.target.unwrap_or("?")
@@ -370,10 +929,67 @@ async fn run_cli_inner(
     }
   }
   if plan.has_errors() {
+    if json_output {
+      emit(render_json(plan, mode, None, []))
+      return 2
+    }
     cli_error("check failed")
   }
   if write {
     let report = @taze.apply(plan, plan.recommended_selection())
+    let verification : Array[VerificationResult] = []
+    if verify && report.status() == Succeeded && report.written_files() > 0 {
+      let verify_emit : (String) -> Unit = if json_output {
+        _ => ()
+      } else {
+        emit
+      }
+      match workspace_root {
+        Some(root) => {
+          let passed = verify_directory(root, emit=verify_emit)
+          verification.push({
+            path: root,
+            passed,
+            exit_code: if passed {
+              0
+            } else {
+              2
+            },
+          })
+        }
+        None => {
+          let directories : Array[String] = []
+          for file in report.files() {
+            if file.status() == Written {
+              let directory = parent_path(file.manifest()).unwrap_or(cwd)
+              if !directories.contains(directory) {
+                directories.push(directory)
+              }
+            }
+          }
+          directories.sort()
+          for directory in directories {
+            let passed = verify_directory(directory, emit=verify_emit)
+            verification.push({
+              path: directory,
+              passed,
+              exit_code: if passed {
+                0
+              } else {
+                2
+              },
+            })
+          }
+        }
+      }
+    }
+    if json_output {
+      emit(render_json(plan, mode, Some(report), verification))
+      if report.exit_code() != 0 || verification.any(item => !item.passed) {
+        return 2
+      }
+      return 0
+    }
     for diagnostic in report.diagnostics {
       emit("error[\{diagnostic.code}]: \{diagnostic.message}")
     }
@@ -395,17 +1011,26 @@ async fn run_cli_inner(
       Cancelled => "cancelled"
     }
     emit("apply \{status}: \{report.written_files()} files written")
-    return report.exit_code()
+    if report.exit_code() != 0 || verification.any(item => !item.passed) {
+      return 2
+    }
+    return 0
+  }
+  if json_output {
+    emit(render_json(plan, mode, None, []))
   }
   0
 }
 
 ///|
 async fn main {
+  let cache : Map[String, @taze.ModuleMetadata] = Map([])
   let code = run_cli(
     @env.args(),
     fetch=name => @taze.query_mooncakes(root="https://mooncakes.io", name),
     emit=println,
+    cache~,
+    retry_delay_ms=1000,
   )
   if code != 0 {
     terminate_process(code)
