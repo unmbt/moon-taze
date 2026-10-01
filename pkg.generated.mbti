@@ -13,7 +13,13 @@ pub async fn check_manifest(Manifest, mode~ : UpdateMode, fetch~ : async (String
 
 pub async fn check_manifest_filtered(Manifest, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
 
+pub async fn check_manifest_timed(Manifest, mode~ : UpdateMode, options~ : ReleaseOptions, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+
+pub async fn check_manifest_timed_filtered(Manifest, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], options~ : ReleaseOptions, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+
 pub async fn check_manifests_filtered(Array[Manifest], Array[String], mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], cwd? : String, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+
+pub async fn check_manifests_timed_filtered(Array[Manifest], Array[String], mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], options~ : ReleaseOptions, cwd? : String, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
 
 pub async fn check_path(String, module_name~ : String, mode~ : UpdateMode) -> CheckPlan
 
@@ -40,6 +46,8 @@ pub fn registry_request_failed(String) -> RegistryError
 pub fn select_version(SemVer, Array[SemVer], latest? : SemVer, mode~ : UpdateMode) -> SemVer?
 
 pub fn selector_valid(String) -> Bool
+
+pub fn valid_metadata(ModuleMetadata, String) -> Bool
 
 // Errors
 pub suberror RegistryError {
@@ -101,6 +109,9 @@ pub struct Config {
   ignoreOtherWorkspaces : Bool?
   retry : Int?
   force : Bool?
+  failOnOutdated : Bool?
+  maturityPeriod : Int?
+  maturityPeriodExclude : Array[String]?
 } derive(Eq, @debug.Debug, @json.FromJson)
 
 pub struct ConfigResult {
@@ -194,6 +205,13 @@ pub struct ParseResult {
 type RegistryOverview derive(@debug.Debug, @json.FromJson)
 
 type RegistryVersion derive(@debug.Debug, @json.FromJson)
+
+pub struct ReleaseOptions {
+  now_ms : Int64
+  maturity_days : Int
+  maturity_exclude : Array[String]
+} derive(Eq, @debug.Debug)
+pub fn ReleaseOptions::ReleaseOptions(Int64, Int, maturity_exclude? : Array[String]) -> Self
 
 pub struct Selection {
   // private fields

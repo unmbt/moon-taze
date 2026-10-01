@@ -17,7 +17,7 @@ moon run --target native cmd/main -- patch -C "path/to/project" --write
 - `-n/--include`、`-x/--exclude` 过滤已有依赖；排除优先。`-l/--include-locked` 保留兼容用法，裸版本默认已参与检查。
 - `-w/--write` 应用所有推荐更新；不传时仅预览。`-r/--recursive` 扫描当前范围内的 `moon.mod`；工作区根目录按 `moon.work` 显式成员检查。`moon-taze.json` 可提供 `mode`、`recursive`、`all`、`include` 和 `exclude`，命令行值优先。不运行安装命令或 `moon fmt`，不会自动升级工具链。
 
-当前缓存为单次进程内缓存，`--force` 会绕过并刷新；瞬时 Registry 错误支持有界重试和退避。`-w --verify` 会在实际写入后按模块运行 `moon check`，失败返回 2 并保留应用报告。持久化 TTL 缓存、时间模式和 TUI 仍未开放。旧 `moon.mod.json` 不自动迁移；工作区成员依赖标记为 `local_workspace`，不会访问 Registry。
+缓存支持用户缓存目录中的版本化 `cache-v1.json`，TTL 为 30 分钟；`--force` 会绕过并刷新，损坏或过期缓存会回退到联网查询。瞬时 Registry 错误支持有界重试、指数退避和可解析的 `Retry-After`。文本输出支持 `--silent`、`--group/--no-group` 和 `--sort`。P3 新增 `newest`、`next`、`--maturity-period` 和 `--maturity-period-exclude`，通过注入的发布时间按固定时钟选择候选；缺少可靠发布时间时会返回明确诊断。`-w --verify` 会在实际写入后按模块运行 `moon check`，失败返回 2 并保留应用报告。TUI 仍未开放。旧 `moon.mod.json` 不自动迁移；工作区成员依赖标记为 `local_workspace`，不会访问 Registry。
 
 ## 写回与恢复
 

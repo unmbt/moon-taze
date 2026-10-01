@@ -30,6 +30,15 @@ async test "CLI preview write filtered update and repeat are offline and isolate
   assert_eq(@fs.readdir(root, include_hidden=true).length(), 1)
   assert_true(output.any(line => line.contains("1.0.0 -> 1.0.12")))
   output.clear()
+  assert_eq(
+    run_cli(
+      ["moon-taze", "patch", "-C", root, "--fail-on-outdated"],
+      fetch~,
+      emit~,
+    ),
+    1,
+  )
+  output.clear()
   calls.clear()
   assert_eq(
     run_cli(
@@ -152,6 +161,13 @@ async test "CLI loads one static config and lets command line selectors override
     0,
   )
   assert_eq(calls, ["demo/b"])
+  @fs.write_file(root + "/moon-taze.json", b"{\"all\":true,\"all\":false}")
+  calls.clear()
+  assert_eq(
+    run_cli(["moon-taze", "-C", root], fetch~, emit=line => output.push(line)),
+    2,
+  )
+  assert_eq(calls, [])
 }
 
 ///|
@@ -213,4 +229,27 @@ async test "CLI verify reports process result without contaminating JSON" {
   let value = @json.parse(output[0])
   assert_true(value is Json::Object(_))
   assert_true(output[0].contains("verification"))
+}
+
+///|
+async test "persistent cache round trips valid entries and ignores corruption" {
+  let root = @fs.tmpdir(prefix="moon-taze-cache")
+  defer @fs.rmdir(root, recursive=true)
+  let path = root + "/nested/cache-v1.json"
+  let cache : Map[String, @taze.ModuleMetadata] = Map([])
+  let times : Map[String, UInt64] = Map([])
+  cache["demo/a"] = cli_fixture_fetch("demo/a")
+  times["demo/a"] = @env.now()
+  save_persistent_cache(Some(path), cache, times)
+  assert_true(@fs.exists(path))
+  let restored : Map[String, @taze.ModuleMetadata] = Map([])
+  let restored_times : Map[String, UInt64] = Map([])
+  load_persistent_cache(Some(path), cache=restored, cache_times=restored_times)
+  assert_true(
+    restored.get(cache_key("https://mooncakes.io", "demo/a")) is Some(_),
+  )
+  @fs.write_file(path, b"not-json")
+  restored.clear()
+  load_persistent_cache(Some(path), cache=restored, cache_times=restored_times)
+  assert_true(restored.is_empty())
 }

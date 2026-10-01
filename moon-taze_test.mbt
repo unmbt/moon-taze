@@ -491,3 +491,92 @@ async test "version selectors filter candidates after metadata fetch" {
     blocked.changes()[0].status is @moon-taze.ChangeStatus::NoCandidate,
   )
 }
+
+///|
+async test "newest uses release time and maturity has a strict boundary" {
+  let source : Bytes = @utf8.encode("import { \"demo/lib@1.0.0\" }")
+  let manifest = @moon-taze.parse_manifest(
+    source,
+    path="moon.mod",
+    module_name="demo/app",
+  ).manifest.unwrap()
+  let now = Int64::from_int(200000000)
+  async fn fetch(
+    name : String,
+  ) -> @moon-taze.ModuleMetadata raise @moon-taze.RegistryError {
+    @moon-taze.ModuleMetadata::ModuleMetadata(name, Some("1.9.0"), [
+      @moon-taze.VersionMetadata::VersionMetadata(
+        "1.0.0",
+        false,
+        None,
+        Some(Int64::from_int(1000000)),
+      ),
+      @moon-taze.VersionMetadata::VersionMetadata(
+        "1.2.0",
+        false,
+        None,
+        Some(Int64::from_int(113600000)),
+      ),
+      @moon-taze.VersionMetadata::VersionMetadata(
+        "1.9.0",
+        false,
+        None,
+        Some(Int64::from_int(100000000)),
+      ),
+    ])
+  }
+  let newest = @moon-taze.check_manifest_timed(
+    manifest,
+    mode=Newest,
+    options=@moon-taze.ReleaseOptions::ReleaseOptions(now, 0),
+    fetch~,
+  )
+  assert_eq(newest.changes()[0].target, Some("1.2.0"))
+  let mature = @moon-taze.check_manifest_timed(
+    manifest,
+    mode=Default,
+    options=@moon-taze.ReleaseOptions::ReleaseOptions(now, 1),
+    fetch~,
+  )
+  assert_eq(mature.changes()[0].candidates, ["1.2.0", "1.9.0"])
+  assert_true(
+    mature.changes()[0].diagnostics.any(item => {
+      item.code == "unknown_release_time"
+    }),
+  )
+  assert_eq(mature.changes()[0].target, Some("1.9.0"))
+  assert_true(
+    mature.changes()[0].diagnostics.any(item => {
+      item.code == "unknown_release_time"
+    }),
+  )
+}
+
+///|
+async test "newest rejects missing release times" {
+  let source : Bytes = @utf8.encode("import { \"demo/lib@1.0.0\" }")
+  let manifest = @moon-taze.parse_manifest(
+    source,
+    path="moon.mod",
+    module_name="demo/app",
+  ).manifest.unwrap()
+  async fn fetch(
+    name : String,
+  ) -> @moon-taze.ModuleMetadata raise @moon-taze.RegistryError {
+    @moon-taze.ModuleMetadata::ModuleMetadata(name, None, [
+      @moon-taze.VersionMetadata::VersionMetadata("1.0.0", false, None, None),
+      @moon-taze.VersionMetadata::VersionMetadata("1.1.0", false, None, None),
+    ])
+  }
+  let plan = @moon-taze.check_manifest_timed(
+    manifest,
+    mode=Newest,
+    options=@moon-taze.ReleaseOptions::ReleaseOptions(
+      Int64::from_int(200000000),
+      0,
+    ),
+    fetch~,
+  )
+  assert_true(plan.has_errors())
+  assert_eq(plan.changes()[0].reason, Some("incomplete_release_times"))
+}

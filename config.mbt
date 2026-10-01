@@ -10,6 +10,9 @@ pub struct Config {
   pub ignoreOtherWorkspaces : Bool?
   pub retry : Int?
   pub force : Bool?
+  pub failOnOutdated : Bool?
+  pub maturityPeriod : Int?
+  pub maturityPeriodExclude : Array[String]?
 } derive(FromJson, Debug, Eq)
 
 ///|
@@ -17,6 +20,59 @@ pub struct ConfigResult {
   pub config : Config?
   pub diagnostics : Array[Diagnostic]
 } derive(Debug, Eq)
+
+///|
+fn duplicate_top_level_key(text : String) -> String? {
+  let keys : Array[String] = []
+  let mut depth = 0
+  let mut index = 0
+  while index < text.length() {
+    let c = text[index]
+    if c == '"' {
+      let start = index + 1
+      index += 1
+      let mut escaped = false
+      while index < text.length() {
+        let current = text[index]
+        if escaped {
+          escaped = false
+        } else if current == '\\' {
+          escaped = true
+        } else if current == '"' {
+          break
+        }
+        index += 1
+      }
+      if depth == 1 {
+        let mut after = index + 1
+        while after < text.length() &&
+              (
+                text[after] == ' ' ||
+                text[after] == '\n' ||
+                text[after] == '\r' ||
+                text[after] == '\t'
+              ) {
+          after += 1
+        }
+        if after < text.length() && text[after] == ':' {
+          let key = text[start:index].to_owned()
+          if keys.contains(key) {
+            return Some(key)
+          }
+          keys.push(key)
+        }
+      }
+    } else if c == '{' || c == '[' {
+      depth += 1
+    } else if c == '}' || c == ']' {
+      if depth > 0 {
+        depth -= 1
+      }
+    }
+    index += 1
+  }
+  None
+}
 
 ///|
 /// Parse one configuration file without executing any user supplied code.
@@ -37,7 +93,25 @@ pub async fn read_config(path : String) -> ConfigResult {
         ],
       }
   }
-  let value = @json.parse(data.text()) catch {
+  let text = data.text()
+  match duplicate_top_level_key(text) {
+    Some(key) =>
+      return {
+        config: None,
+        diagnostics: [
+          diagnostic(
+            "invalid_config",
+            "duplicate configuration key: {key}",
+            Some(path),
+            None,
+            None,
+            None,
+          ),
+        ],
+      }
+    None => ()
+  }
+  let value = @json.parse(text) catch {
     error =>
       return {
         config: None,
@@ -57,7 +131,7 @@ pub async fn read_config(path : String) -> ConfigResult {
     Json::Object(object) => {
       let allowed = [
         "mode", "recursive", "all", "include", "exclude", "ignoreOtherWorkspaces",
-        "retry", "force",
+        "retry", "force", "failOnOutdated", "maturityPeriod", "maturityPeriodExclude",
       ]
       for key in object.keys() {
         if !allowed.contains(key) {

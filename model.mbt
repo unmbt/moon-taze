@@ -175,6 +175,32 @@ pub fn Clock::Clock(now_ms : () -> Int64) -> Clock {
 }
 
 ///|
+/// Release-time policy used by newest/next and maturity-aware resolution.
+pub struct ReleaseOptions {
+  pub now_ms : Int64
+  pub maturity_days : Int
+  pub maturity_exclude : Array[String]
+} derive(Debug, Eq)
+
+///|
+/// Construct deterministic release-time options for tests and callers.
+pub fn ReleaseOptions::ReleaseOptions(
+  now_ms : Int64,
+  maturity_days : Int,
+  maturity_exclude? : Array[String] = [],
+) -> ReleaseOptions {
+  {
+    now_ms,
+    maturity_days: if maturity_days < 0 {
+      0
+    } else {
+      maturity_days
+    },
+    maturity_exclude: maturity_exclude.copy(),
+  }
+}
+
+///|
 fn diagnostic(
   code : String,
   message : String,

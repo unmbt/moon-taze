@@ -11,6 +11,12 @@ pub fn registry_request_failed(message : String) -> RegistryError {
 }
 
 ///|
+/// Validate successful metadata before it enters a persistent cache.
+pub fn valid_metadata(value : ModuleMetadata, requested : String) -> Bool {
+  metadata_is_valid(value, requested) is None
+}
+
+///|
 fn RegistryError::message(self : RegistryError) -> String {
   match self {
     RequestFailed(value) => value
@@ -59,6 +65,15 @@ fn optional_reason(value : Json) -> String? raise RegistryError {
 fn registry_url(root : String, module : String) -> String {
   let encoded = module.replace(old="/", new="%2F")
   root + "/api/v0/modules/" + encoded
+}
+
+///|
+fn retry_after_header(value : String) -> String {
+  let seconds : Int? = Some(@string.parse_int(value)) catch { _ => None }
+  match seconds {
+    Some(value) if value >= 0 => "|retry-after-ms=\{value * 1000}"
+    _ => ""
+  }
 }
 
 ///|
@@ -122,7 +137,11 @@ pub async fn query_mooncakes(
     err => raise RegistryError::RequestFailed(err.to_string())
   }
   if response.code < 200 || response.code >= 300 {
-    raise RegistryError::RequestFailed("HTTP \{response.code}")
+    let retry_after = match response.headers.get("retry-after") {
+      Some(value) => retry_after_header(value)
+      None => ""
+    }
+    raise RegistryError::RequestFailed("HTTP \{response.code}\{retry_after}")
   }
   let json = @json.parse(text) catch {
     _ => raise RegistryError::InvalidMetadata("invalid JSON")
@@ -143,6 +162,21 @@ fn retryable_registry_error(error : RegistryError) -> Bool {
       message.has_prefix("HTTP 408") ||
       message.has_prefix("HTTP 429") ||
       message.has_prefix("HTTP 5")
+  }
+}
+
+///|
+fn retry_after_delay(error : RegistryError) -> Int? {
+  match error {
+    RequestFailed(message) =>
+      match message.split_once("|retry-after-ms=") {
+        Some((_, value)) =>
+          Some(@string.parse_int(value.to_owned())) catch {
+            _ => None
+          }
+        None => None
+      }
+    InvalidMetadata(_) => None
   }
 }
 
@@ -174,9 +208,15 @@ async fn query_mooncakes_retry_attempt(
       if !retryable_registry_error(error) || attempt >= max_retries {
         raise error
       }
-      let mut delay = base_delay
-      for _ in 0..<attempt {
-        delay = delay * 2
+      let delay = match retry_after_delay(error) {
+        Some(value) if value >= 0 => value
+        _ => {
+          let mut value = base_delay
+          for _ in 0..<attempt {
+            value = value * 2
+          }
+          value
+        }
       }
       if delay > 0 {
         @async.sleep(delay) catch {
@@ -484,6 +524,28 @@ fn resolve_dependency(
   metadata : ModuleMetadata,
   mode : UpdateMode,
   exclude~ : Array[String],
+  options~ : ReleaseOptions,
+) -> DependencyChange {
+  if mode == UpdateMode::Newest ||
+    mode == UpdateMode::Next ||
+    options.maturity_days > 0 {
+    return resolve_dependency_release(
+      dependency,
+      metadata,
+      mode,
+      exclude~,
+      options~,
+    )
+  }
+  resolve_dependency_legacy(dependency, metadata, mode, exclude~)
+}
+
+///|
+fn resolve_dependency_legacy(
+  dependency : Dependency,
+  metadata : ModuleMetadata,
+  mode : UpdateMode,
+  exclude~ : Array[String],
 ) -> DependencyChange {
   let current = parse_version(dependency.version) catch {
     _ => {
@@ -652,6 +714,237 @@ fn resolve_dependency(
 }
 
 ///|
+fn release_exempt(
+  dependency : Dependency,
+  version : String,
+  selectors : Array[String],
+) -> Bool {
+  selectors.any(selector => {
+    if selector_has_version(selector) {
+      selector_matches_version(dependency.name, version, selector)
+    } else {
+      matches_glob(selector, dependency.name)
+    }
+  })
+}
+
+///|
+fn resolve_dependency_release(
+  dependency : Dependency,
+  metadata : ModuleMetadata,
+  mode : UpdateMode,
+  exclude~ : Array[String],
+  options~ : ReleaseOptions,
+) -> DependencyChange {
+  let current = parse_version(dependency.version) catch {
+    _ => {
+      let diag = diagnostic(
+        "invalid_version",
+        "invalid declared version",
+        Some(dependency.manifest),
+        Some(dependency.name),
+        Some(dependency.span.line),
+        Some(dependency.span.column),
+      )
+      return {
+        dependency,
+        mode,
+        status: Error,
+        target: None,
+        candidates: [],
+        diff: None,
+        reason: Some("invalid_version"),
+        diagnostics: [diag],
+      }
+    }
+  }
+  let diagnostics : Array[Diagnostic] = []
+  let current_in_registry = metadata.versions.any(item => {
+    item.version == dependency.version
+  })
+  let current_yanked = metadata.versions.any(item => {
+    item.version == dependency.version && item.yanked
+  })
+  if !current_in_registry {
+    diagnostics.push(
+      warning(
+        "current_version_missing",
+        "declared version is not present in registry metadata",
+        Some(dependency.manifest),
+        Some(dependency.name),
+        Some(dependency.span.line),
+        Some(dependency.span.column),
+      ),
+    )
+  } else if current_yanked {
+    diagnostics.push(
+      warning(
+        "current_version_yanked",
+        "declared version is withdrawn; newer eligible versions may still be selected",
+        Some(dependency.manifest),
+        Some(dependency.name),
+        Some(dependency.span.line),
+        Some(dependency.span.column),
+      ),
+    )
+  }
+  let require_time = mode == UpdateMode::Newest || mode == UpdateMode::Next
+  let maturity_ms = Int64::from_int(options.maturity_days) * 86400000
+  let candidates : Array[(SemVer, VersionMetadata)] = []
+  let candidate_names : Array[String] = []
+  for item in metadata.versions {
+    if item.yanked ||
+      exclude.any(selector => {
+        selector_has_version(selector) &&
+        selector_matches_version(dependency.name, item.version, selector)
+      }) {
+      continue
+    }
+    let parsed = parse_version(item.version) catch {
+      _ => {
+        diagnostics.push(
+          diagnostic(
+            "invalid_metadata",
+            "registry returned an invalid version",
+            Some(dependency.manifest),
+            Some(dependency.name),
+            Some(dependency.span.line),
+            Some(dependency.span.column),
+          ),
+        )
+        continue
+      }
+    }
+    if SemVer::compare(parsed, current) <= 0 {
+      continue
+    }
+    candidate_names.push(item.version)
+    if require_time &&
+      (
+        item.published_at is None ||
+        item.published_at.unwrap() > options.now_ms ||
+        item.published_at.unwrap() < 0
+      ) {
+      diagnostics.push(
+        diagnostic(
+          "incomplete_release_times",
+          "newest and next require valid release times for every candidate",
+          Some(dependency.manifest),
+          Some(dependency.name),
+          Some(dependency.span.line),
+          Some(dependency.span.column),
+        ),
+      )
+      return {
+        dependency,
+        mode,
+        status: Error,
+        target: None,
+        candidates: candidate_names,
+        diff: None,
+        reason: Some("incomplete_release_times"),
+        diagnostics,
+      }
+    }
+    if options.maturity_days > 0 &&
+      !release_exempt(dependency, item.version, options.maturity_exclude) {
+      match item.published_at {
+        Some(published) if published >= 0 &&
+          published < options.now_ms - maturity_ms => ()
+        _ => {
+          diagnostics.push(
+            warning(
+              "unknown_release_time",
+              "candidate release is missing or has not reached the maturity period",
+              Some(dependency.manifest),
+              Some(dependency.name),
+              Some(dependency.span.line),
+              Some(dependency.span.column),
+            ),
+          )
+          continue
+        }
+      }
+    }
+    candidates.push((parsed, item))
+  }
+  if mode == UpdateMode::Next {
+    diagnostics.push(
+      warning(
+        "next_tag_unavailable",
+        "registry does not expose a verified next tag; using newest release time",
+        Some(dependency.manifest),
+        Some(dependency.name),
+        Some(dependency.span.line),
+        Some(dependency.span.column),
+      ),
+    )
+  }
+  let target : SemVer? = if require_time {
+    let mut selected : (SemVer, VersionMetadata)? = None
+    for candidate in candidates {
+      match candidate.1.published_at {
+        Some(published) =>
+          match selected {
+            None => selected = Some(candidate)
+            Some(previous) =>
+              if published > previous.1.published_at.unwrap() ||
+                (
+                  published == previous.1.published_at.unwrap() &&
+                  (
+                    SemVer::compare(candidate.0, previous.0) > 0 ||
+                    (
+                      SemVer::compare(candidate.0, previous.0) == 0 &&
+                      candidate.0.to_string() > previous.0.to_string()
+                    )
+                  )
+                ) {
+                selected = Some(candidate)
+              }
+          }
+        None => ()
+      }
+    }
+    selected.map(item => item.0)
+  } else {
+    let versions = candidates.map(item => item.0)
+    select_version(current, versions, mode~)
+  }
+  match target {
+    Some(target) =>
+      {
+        dependency,
+        mode,
+        status: UpdateAvailable,
+        target: Some(target.to_string()),
+        candidates: candidate_names,
+        diff: Some(diff_kind(current, target)),
+        reason: None,
+        diagnostics,
+      }
+    None =>
+      {
+        dependency,
+        mode,
+        status: if candidate_names.is_empty() {
+          UpToDate
+        } else {
+          NoCandidate
+        },
+        target: None,
+        candidates: candidate_names,
+        diff: None,
+        reason: if candidate_names.is_empty() {
+          None
+        } else {
+          Some("no_candidate")
+        },
+        diagnostics,
+      }
+  }
+}
+
+///|
 priv enum FetchResult {
   FetchSuccess(ModuleMetadata)
   FetchFailure(RegistryError)
@@ -665,6 +958,24 @@ pub async fn check_manifest(
   fetch~ : async (String) -> ModuleMetadata raise RegistryError,
 ) -> CheckPlan {
   check_manifest_filtered(manifest, mode~, include=[], exclude=[], fetch~)
+}
+
+///|
+/// Build a plan with release-time selection and maturity filtering enabled.
+pub async fn check_manifest_timed(
+  manifest : Manifest,
+  mode~ : UpdateMode,
+  options~ : ReleaseOptions,
+  fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+) -> CheckPlan {
+  check_manifest_timed_filtered(
+    manifest,
+    mode~,
+    include=[],
+    exclude=[],
+    options~,
+    fetch~,
+  )
 }
 
 ///|
@@ -683,6 +994,29 @@ pub async fn check_manifest_filtered(
     exclude~,
     local_modules=Map([]),
     fetched=Map([]),
+    options=ReleaseOptions::ReleaseOptions(0, 0),
+    fetch~,
+  )
+}
+
+///|
+/// Timed variant of `check_manifest_filtered`.
+pub async fn check_manifest_timed_filtered(
+  manifest : Manifest,
+  mode~ : UpdateMode,
+  include~ : Array[String],
+  exclude~ : Array[String],
+  options~ : ReleaseOptions,
+  fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+) -> CheckPlan {
+  check_manifest_filtered_internal(
+    manifest,
+    mode~,
+    include~,
+    exclude~,
+    local_modules=Map([]),
+    fetched=Map([]),
+    options~,
     fetch~,
   )
 }
@@ -697,6 +1031,30 @@ pub async fn check_manifests_filtered(
   mode~ : UpdateMode,
   include~ : Array[String],
   exclude~ : Array[String],
+  cwd? : String = @env.current_dir().unwrap_or("."),
+  fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+) -> CheckPlan {
+  check_manifests_timed_filtered(
+    manifests,
+    local_modules,
+    mode~,
+    include~,
+    exclude~,
+    options=ReleaseOptions::ReleaseOptions(0, 0),
+    cwd~,
+    fetch~,
+  )
+}
+
+///|
+/// Timed variant for workspaces and recursive multi-module checks.
+pub async fn check_manifests_timed_filtered(
+  manifests : Array[Manifest],
+  local_modules : Array[String],
+  mode~ : UpdateMode,
+  include~ : Array[String],
+  exclude~ : Array[String],
+  options~ : ReleaseOptions,
   cwd? : String = @env.current_dir().unwrap_or("."),
   fetch~ : async (String) -> ModuleMetadata raise RegistryError,
 ) -> CheckPlan {
@@ -716,6 +1074,7 @@ pub async fn check_manifests_filtered(
       exclude~,
       local_modules=locals,
       fetched~,
+      options~,
       fetch~,
     )
     snapshots.append(item.snapshots)
@@ -734,6 +1093,7 @@ async fn check_manifest_filtered_internal(
   exclude~ : Array[String],
   local_modules~ : Map[String, Unit],
   fetched~ : Map[String, FetchResult],
+  options~ : ReleaseOptions,
   fetch~ : async (String) -> ModuleMetadata raise RegistryError,
 ) -> CheckPlan {
   // Reparse authoritative bytes: callers can mutate Manifest.dependencies.
@@ -747,45 +1107,6 @@ async fn check_manifest_filtered_internal(
     return make_plan([], [], parsed.diagnostics)
   }
   let manifest = parsed.manifest.unwrap()
-  if mode == UpdateMode::Newest || mode == UpdateMode::Next {
-    let changes = manifest.dependencies.map(dependency => {
-      let diag = diagnostic(
-        "unsupported_mode",
-        "newest and next require release-time metadata and are not available in P1a",
-        Some(dependency.manifest),
-        Some(dependency.name),
-        Some(dependency.span.line),
-        Some(dependency.span.column),
-      )
-      {
-        dependency,
-        mode,
-        status: Error,
-        target: None,
-        candidates: [],
-        diff: None,
-        reason: Some("unsupported_mode"),
-        diagnostics: [diag],
-      }
-    })
-    let diagnostics : Array[Diagnostic] = []
-    for change in changes {
-      diagnostics.append(change.diagnostics)
-    }
-    if diagnostics.is_empty() {
-      diagnostics.push(
-        diagnostic(
-          "unsupported_mode",
-          "newest and next require release-time metadata and are not available in P1a",
-          Some(manifest.path),
-          None,
-          None,
-          None,
-        ),
-      )
-    }
-    return make_plan([manifest], changes, diagnostics, cwd=checked_cwd)
-  }
   let mut invalid_selector : String? = None
   for selector in include {
     if (!name_selector_valid(selector) || selector_has_version(selector)) &&
@@ -877,7 +1198,8 @@ async fn check_manifest_filtered_internal(
       FetchSuccess(metadata) => {
         let change = match metadata_is_valid(metadata, dependency.name) {
           Some(reason) => invalid_metadata_change(dependency, mode, reason)
-          None => resolve_dependency(dependency, metadata, mode, exclude~)
+          None =>
+            resolve_dependency(dependency, metadata, mode, exclude~, options~)
         }
         diagnostics.append(change.diagnostics)
         changes.push(change)
