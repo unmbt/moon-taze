@@ -122,6 +122,65 @@ pub struct CheckPlan {
 }
 
 ///|
+/// Policy used by the pure `resolve` entry point.  It contains only selection
+/// rules; registry access and filesystem effects stay outside the policy.
+pub struct Policy {
+  pub mode : UpdateMode
+  pub exclude : Array[String]
+  pub maturity_days : Int
+  pub maturity_exclude : Array[String]
+} derive(Debug, Eq)
+
+///|
+pub fn Policy::Policy(
+  mode : UpdateMode,
+  exclude? : Array[String] = [],
+  maturity_days? : Int = 0,
+  maturity_exclude? : Array[String] = [],
+) -> Policy {
+  {
+    mode,
+    exclude: exclude.copy(),
+    maturity_days: if maturity_days < 0 {
+      0
+    } else {
+      maturity_days
+    },
+    maturity_exclude: maturity_exclude.copy(),
+  }
+}
+
+///|
+/// A callback returns an empty string when the event is accepted. Any
+/// non-empty string becomes a stable callback diagnostic.
+pub struct Callbacks {
+  pub after_discovery : ((CheckPlan) -> String)?
+  pub dependency_resolved : ((DependencyChange) -> String)?
+  pub before_apply : ((Selection) -> String)?
+  pub file_applied : ((FileApplyResult) -> String)?
+  pub after_run : ((ApplyReport) -> String)?
+}
+
+///|
+/// Construct an empty callback set.  Callers can fill only the events they
+/// need while preserving a single check/resolve/apply lifecycle contract.
+pub fn Callbacks::Callbacks(
+  after_discovery? : ((CheckPlan) -> String)? = None,
+  dependency_resolved? : ((DependencyChange) -> String)? = None,
+  before_apply? : ((Selection) -> String)? = None,
+  file_applied? : ((FileApplyResult) -> String)? = None,
+  after_run? : ((ApplyReport) -> String)? = None,
+) -> Callbacks {
+  {
+    after_discovery,
+    dependency_resolved,
+    before_apply,
+    file_applied,
+    after_run,
+  }
+}
+
+///|
 fn copy_change(change : DependencyChange) -> DependencyChange {
   {
     ..change,
@@ -160,6 +219,12 @@ pub fn CheckPlan::diagnostics(self : CheckPlan) -> Array[Diagnostic] {
 ///|
 pub fn CheckPlan::has_errors(self : CheckPlan) -> Bool {
   has_error_diagnostics(self.issues) || self.entries.any(c => c.status == Error)
+}
+
+///|
+/// Return the selected tuples as a detached array for callback consumers.
+pub fn Selection::items(self : Selection) -> Array[(String, String, String)] {
+  self.items.copy()
 }
 
 ///|
@@ -237,5 +302,65 @@ fn warning(
     dependency,
     line,
     column,
+  }
+}
+
+///|
+/// Dispatch check-side callbacks in a fixed order.  Callback failures become
+/// plan diagnostics, so a consumer cannot accidentally apply a vetoed plan.
+fn dispatch_check_callbacks(
+  plan : CheckPlan,
+  callbacks : Callbacks?,
+) -> CheckPlan {
+  match callbacks {
+    None => plan
+    Some(callbacks) => {
+      let issues = plan.issues.copy()
+      let entries = plan.entries.map(copy_change)
+      match callbacks.after_discovery {
+        Some(callback) => {
+          let message = callback(plan)
+          if message != "" {
+            issues.push(
+              diagnostic("callback_failed", message, None, None, None, None),
+            )
+          }
+        }
+        None => ()
+      }
+      for i, change in entries {
+        match callbacks.dependency_resolved {
+          Some(callback) => {
+            let message = callback(change)
+            if message != "" {
+              issues.push(
+                diagnostic(
+                  "callback_failed",
+                  message,
+                  Some(change.dependency.manifest),
+                  Some(change.dependency.name),
+                  Some(change.dependency.span.line),
+                  Some(change.dependency.span.column),
+                ),
+              )
+              let nested = change.diagnostics.copy()
+              nested.push(
+                diagnostic(
+                  "callback_failed",
+                  message,
+                  Some(change.dependency.manifest),
+                  Some(change.dependency.name),
+                  Some(change.dependency.span.line),
+                  Some(change.dependency.span.column),
+                ),
+              )
+              entries[i] = { ..change, status: Error, diagnostics: nested, }
+            }
+          }
+          None => ()
+        }
+      }
+      { ..plan, entries, issues, }
+    }
   }
 }

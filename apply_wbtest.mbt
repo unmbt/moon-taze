@@ -57,7 +57,12 @@ async test "AC-042 second temporary create or write failure commits nothing" {
         (native.stage)(path, file, bytes)
       },
     }
-    let result = apply_with_services(plan, plan.recommended_selection(), io)
+    let result = apply_with_services(
+      plan,
+      plan.recommended_selection(),
+      io,
+      None,
+    )
     assert_true(result.status is Failed)
     assert_eq(result.written_files(), 0)
     assert_eq(result.exit_code(), 2)
@@ -83,7 +88,7 @@ async test "AC-043 second replacement failure retains exact partial result" {
       (native.replace)(file, path)
     },
   }
-  let result = apply_with_services(plan, plan.recommended_selection(), io)
+  let result = apply_with_services(plan, plan.recommended_selection(), io, None)
   assert_true(result.status is Partial)
   assert_eq(result.exit_code(), 2)
   assert_eq(result.written_files(), 1)
@@ -114,7 +119,7 @@ async test "AC-041 edit after preparation cancels every commit with accurate pat
     ..native,
     before_commit: () => @fs.write_file(edited_path, edited),
   }
-  let result = apply_with_services(plan, plan.recommended_selection(), io)
+  let result = apply_with_services(plan, plan.recommended_selection(), io, None)
   assert_eq(result.written_files(), 0)
   assert_eq(result.diagnostics[0].code, "stale_plan")
   assert_eq(result.diagnostics[0].manifest, Some(@fs.realpath(edited_path)))
@@ -147,7 +152,12 @@ async test "cancellation before first commit and after one commit stops at bound
         cancelled.val = true
       },
     }
-    let result = apply_with_services(plan, plan.recommended_selection(), io)
+    let result = apply_with_services(
+      plan,
+      plan.recommended_selection(),
+      io,
+      None,
+    )
     if after_commit {
       assert_true(result.status is Partial)
       assert_eq(result.written_files(), 1)
@@ -183,7 +193,7 @@ async test "real async cancellation cleans resources while preserving the report
   }
   let result = @async.with_task_group(group => {
     let task = group.spawn(() => {
-      apply_with_services(plan, plan.recommended_selection(), io)
+      apply_with_services(plan, plan.recommended_selection(), io, None)
     })
     @async.with_timeout(5000, () => reached.acquire())
     reached.release()
@@ -222,10 +232,10 @@ async test "overlapping spans and malformed selections cause zero IO" {
       path
     },
   }
-  let result = apply_with_services(plan, plan.recommended_selection(), io)
+  let result = apply_with_services(plan, plan.recommended_selection(), io, None)
   assert_eq(result.diagnostics[0].code, "invalid_selection")
   assert_eq(calls.val, 0)
-  let empty = apply_with_services(plan, plan.selection([]), io)
+  let empty = apply_with_services(plan, plan.selection([]), io, None)
   assert_true(empty.status is Succeeded)
   assert_eq(calls.val, 0)
 }
@@ -264,7 +274,12 @@ async test "unsafe target and unavailable atomic replacement never truncate a ma
         write_error("write_failed", "atomic replacement unsupported")
       },
     }
-    let report = apply_with_services(plan, plan.recommended_selection(), io)
+    let report = apply_with_services(
+      plan,
+      plan.recommended_selection(),
+      io,
+      None,
+    )
     assert_eq(report.exit_code(), 2)
     assert_eq(report.written_files(), 0)
     assert_eq(

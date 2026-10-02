@@ -11,6 +11,12 @@ pub fn registry_request_failed(message : String) -> RegistryError {
 }
 
 ///|
+/// A pure resolution request rejected before a dependency change is formed.
+pub suberror ResolveError {
+  InvalidMetadata(String)
+}
+
+///|
 /// Validate successful metadata before it enters a persistent cache.
 pub fn valid_metadata(value : ModuleMetadata, requested : String) -> Bool {
   metadata_is_valid(value, requested) is None
@@ -541,6 +547,33 @@ fn resolve_dependency(
 }
 
 ///|
+/// Resolve one dependency without performing registry or filesystem IO.
+/// Metadata is validated before policy selection so callers cannot accidentally
+/// apply a result from a different module or malformed version set.
+pub fn resolve(
+  dependency : Dependency,
+  metadata : ModuleMetadata,
+  policy : Policy,
+  now~ : Int64,
+) -> DependencyChange raise ResolveError {
+  match metadata_is_valid(metadata, dependency.name) {
+    Some(reason) => raise ResolveError::InvalidMetadata(reason)
+    None =>
+      resolve_dependency(
+        dependency,
+        metadata,
+        policy.mode,
+        exclude=policy.exclude,
+        options=ReleaseOptions::ReleaseOptions(
+          now,
+          policy.maturity_days,
+          maturity_exclude=policy.maturity_exclude,
+        ),
+      )
+  }
+}
+
+///|
 fn resolve_dependency_legacy(
   dependency : Dependency,
   metadata : ModuleMetadata,
@@ -952,12 +985,35 @@ priv enum FetchResult {
 
 ///|
 /// Build a complete plan using an injected Registry function. This is the offline test seam.
+///
+/// This is the concise lifecycle entry point; the more explicit
+/// `check_manifest*` variants additionally expose selectors and release-time
+/// options.
+pub async fn check(
+  manifest : Manifest,
+  mode? : UpdateMode = Default,
+  fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+  callbacks? : Callbacks? = None,
+) -> CheckPlan {
+  check_manifest(manifest, mode~, fetch~, callbacks~)
+}
+
+///|
+/// Build a complete plan using an injected Registry function. This is the offline test seam.
 pub async fn check_manifest(
   manifest : Manifest,
   mode~ : UpdateMode,
   fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+  callbacks? : Callbacks? = None,
 ) -> CheckPlan {
-  check_manifest_filtered(manifest, mode~, include=[], exclude=[], fetch~)
+  check_manifest_filtered(
+    manifest,
+    mode~,
+    include=[],
+    exclude=[],
+    fetch~,
+    callbacks~,
+  )
 }
 
 ///|
@@ -967,6 +1023,7 @@ pub async fn check_manifest_timed(
   mode~ : UpdateMode,
   options~ : ReleaseOptions,
   fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+  callbacks? : Callbacks? = None,
 ) -> CheckPlan {
   check_manifest_timed_filtered(
     manifest,
@@ -975,6 +1032,7 @@ pub async fn check_manifest_timed(
     exclude=[],
     options~,
     fetch~,
+    callbacks~,
   )
 }
 
@@ -986,8 +1044,9 @@ pub async fn check_manifest_filtered(
   include~ : Array[String],
   exclude~ : Array[String],
   fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+  callbacks? : Callbacks? = None,
 ) -> CheckPlan {
-  check_manifest_filtered_internal(
+  let plan = check_manifest_filtered_internal(
     manifest,
     mode~,
     include~,
@@ -997,6 +1056,7 @@ pub async fn check_manifest_filtered(
     options=ReleaseOptions::ReleaseOptions(0, 0),
     fetch~,
   )
+  dispatch_check_callbacks(plan, callbacks)
 }
 
 ///|
@@ -1008,8 +1068,9 @@ pub async fn check_manifest_timed_filtered(
   exclude~ : Array[String],
   options~ : ReleaseOptions,
   fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+  callbacks? : Callbacks? = None,
 ) -> CheckPlan {
-  check_manifest_filtered_internal(
+  let plan = check_manifest_filtered_internal(
     manifest,
     mode~,
     include~,
@@ -1019,6 +1080,7 @@ pub async fn check_manifest_timed_filtered(
     options~,
     fetch~,
   )
+  dispatch_check_callbacks(plan, callbacks)
 }
 
 ///|
@@ -1033,6 +1095,7 @@ pub async fn check_manifests_filtered(
   exclude~ : Array[String],
   cwd? : String = @env.current_dir().unwrap_or("."),
   fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+  callbacks? : Callbacks? = None,
 ) -> CheckPlan {
   check_manifests_timed_filtered(
     manifests,
@@ -1043,6 +1106,7 @@ pub async fn check_manifests_filtered(
     options=ReleaseOptions::ReleaseOptions(0, 0),
     cwd~,
     fetch~,
+    callbacks~,
   )
 }
 
@@ -1057,6 +1121,7 @@ pub async fn check_manifests_timed_filtered(
   options~ : ReleaseOptions,
   cwd? : String = @env.current_dir().unwrap_or("."),
   fetch~ : async (String) -> ModuleMetadata raise RegistryError,
+  callbacks? : Callbacks? = None,
 ) -> CheckPlan {
   let locals : Map[String, Unit] = Map([])
   for name in local_modules {
@@ -1081,7 +1146,10 @@ pub async fn check_manifests_timed_filtered(
     entries.append(item.entries)
     diagnostics.append(item.issues)
   }
-  make_plan(snapshots, entries, diagnostics, cwd~)
+  dispatch_check_callbacks(
+    make_plan(snapshots, entries, diagnostics, cwd~),
+    callbacks,
+  )
 }
 
 ///|

@@ -97,7 +97,7 @@ async test "Native simultaneous writer encounters lock while first writer commit
   }
   let (first, second) = @async.with_task_group(group => {
     let task = group.spawn(() => {
-      apply_with_services(plan, plan.recommended_selection(), first_io)
+      apply_with_services(plan, plan.recommended_selection(), first_io, None)
     })
     @async.with_timeout(5000, () => ready.acquire())
     ready.release()

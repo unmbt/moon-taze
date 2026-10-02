@@ -91,6 +91,7 @@ async fn apply_with_services(
   plan : CheckPlan,
   selection : Selection,
   services : WriteServices,
+  callbacks : Callbacks?,
 ) -> ApplyReport {
   let files : Array[FileApplyResult] = []
   let diagnostics : Array[Diagnostic] = []
@@ -101,8 +102,21 @@ async fn apply_with_services(
   let mut failed = false
   try {
     let patches = prepare_patches(plan, selection)
+    match callbacks {
+      Some(callbacks) =>
+        match callbacks.before_apply {
+          Some(callback) => {
+            let message = callback(selection)
+            if message != "" {
+              write_error("callback_denied", message)
+            }
+          }
+          None => ()
+        }
+      None => ()
+    }
     if patches.is_empty() {
-      return {
+      let report = {
         status: Succeeded,
         files: plan.snapshots.map(snapshot => {
           manifest: snapshot.path,
@@ -111,6 +125,7 @@ async fn apply_with_services(
         }),
         diagnostics: [],
       }
+      return dispatch_after_run(report, callbacks)
     }
     let snapshots : Array[(String, Bytes)] = []
     let seen : Map[String, Unit] = Map([])
@@ -208,6 +223,24 @@ async fn apply_with_services(
             }
           }
         })
+        match callbacks {
+          Some(callbacks) =>
+            match callbacks.file_applied {
+              Some(callback) =>
+                match
+                  files.iter().find_first(file => file.manifest == item.path) {
+                  Some(file) => {
+                    let message = callback(file)
+                    if message != "" {
+                      write_error("callback_failed", message)
+                    }
+                  }
+                  None => ()
+                }
+              None => ()
+            }
+          None => ()
+        }
       }
     }
   } catch {
@@ -278,7 +311,38 @@ async fn apply_with_services(
     Succeeded
   }
   files.sort_by((a, b) => a.manifest.compare(b.manifest))
-  { status, files, diagnostics, }
+  dispatch_after_run({ status, files, diagnostics, }, callbacks)
+}
+
+///|
+fn dispatch_after_run(
+  report : ApplyReport,
+  callbacks : Callbacks?,
+) -> ApplyReport {
+  match callbacks {
+    Some(callbacks) =>
+      match callbacks.after_run {
+        Some(callback) => {
+          let message = callback(report)
+          if message == "" {
+            report
+          } else {
+            let diagnostics = report.diagnostics.copy()
+            diagnostics.push(
+              diagnostic("callback_failed", message, None, None, None, None),
+            )
+            let status = if report.written_files() > 0 {
+              ApplyStatus::Partial
+            } else {
+              ApplyStatus::Failed
+            }
+            { ..report, status, diagnostics, }
+          }
+        }
+        None => report
+      }
+    None => report
+  }
 }
 
 ///|
@@ -300,6 +364,10 @@ async fn apply_with_services(
 ///   assert_eq(report.exit_code(), 0)
 /// }
 /// ```
-pub async fn apply(plan : CheckPlan, selection : Selection) -> ApplyReport {
-  apply_with_services(plan, selection, native_write_services())
+pub async fn apply(
+  plan : CheckPlan,
+  selection : Selection,
+  callbacks? : Callbacks? = None,
+) -> ApplyReport {
+  apply_with_services(plan, selection, native_write_services(), callbacks)
 }

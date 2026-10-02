@@ -7,19 +7,21 @@ import {
 }
 
 // Values
-pub async fn apply(CheckPlan, Selection) -> ApplyReport
+pub async fn apply(CheckPlan, Selection, callbacks? : Callbacks?) -> ApplyReport
 
-pub async fn check_manifest(Manifest, mode~ : UpdateMode, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+pub async fn check(Manifest, mode? : UpdateMode, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
 
-pub async fn check_manifest_filtered(Manifest, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+pub async fn check_manifest(Manifest, mode~ : UpdateMode, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
 
-pub async fn check_manifest_timed(Manifest, mode~ : UpdateMode, options~ : ReleaseOptions, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+pub async fn check_manifest_filtered(Manifest, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
 
-pub async fn check_manifest_timed_filtered(Manifest, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], options~ : ReleaseOptions, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+pub async fn check_manifest_timed(Manifest, mode~ : UpdateMode, options~ : ReleaseOptions, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
 
-pub async fn check_manifests_filtered(Array[Manifest], Array[String], mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], cwd? : String, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+pub async fn check_manifest_timed_filtered(Manifest, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], options~ : ReleaseOptions, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
 
-pub async fn check_manifests_timed_filtered(Array[Manifest], Array[String], mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], options~ : ReleaseOptions, cwd? : String, fetch~ : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
+pub async fn check_manifests_filtered(Array[Manifest], Array[String], mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], cwd? : String, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
+
+pub async fn check_manifests_timed_filtered(Array[Manifest], Array[String], mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], options~ : ReleaseOptions, cwd? : String, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
 
 pub async fn check_path(String, module_name~ : String, mode~ : UpdateMode) -> CheckPlan
 
@@ -43,6 +45,8 @@ pub async fn read_workspace(String) -> WorkspaceParseResult
 
 pub fn registry_request_failed(String) -> RegistryError
 
+pub fn resolve(Dependency, ModuleMetadata, Policy, now~ : Int64) -> DependencyChange raise ResolveError
+
 pub fn select_version(SemVer, Array[SemVer], latest? : SemVer, mode~ : UpdateMode) -> SemVer?
 
 pub fn selector_valid(String) -> Bool
@@ -54,6 +58,10 @@ pub suberror RegistryError {
   RequestFailed(String)
   InvalidMetadata(String)
 } derive(@debug.Debug)
+
+pub suberror ResolveError {
+  InvalidMetadata(String)
+}
 
 pub suberror SemVerError {
   InvalidVersion(String)
@@ -77,6 +85,15 @@ pub(all) enum ApplyStatus {
   Partial
   Cancelled
 } derive(Eq, @debug.Debug)
+
+pub struct Callbacks {
+  after_discovery : ((CheckPlan) -> String)?
+  dependency_resolved : ((DependencyChange) -> String)?
+  before_apply : ((Selection) -> String)?
+  file_applied : ((FileApplyResult) -> String)?
+  after_run : ((ApplyReport) -> String)?
+}
+pub fn Callbacks::Callbacks(after_discovery? : ((CheckPlan) -> String)?, dependency_resolved? : ((DependencyChange) -> String)?, before_apply? : ((Selection) -> String)?, file_applied? : ((FileApplyResult) -> String)?, after_run? : ((ApplyReport) -> String)?) -> Self
 
 pub enum ChangeStatus {
   UpdateAvailable
@@ -202,6 +219,14 @@ pub struct ParseResult {
   diagnostics : Array[Diagnostic]
 } derive(Eq, @debug.Debug)
 
+pub struct Policy {
+  mode : UpdateMode
+  exclude : Array[String]
+  maturity_days : Int
+  maturity_exclude : Array[String]
+} derive(Eq, @debug.Debug)
+pub fn Policy::Policy(UpdateMode, exclude? : Array[String], maturity_days? : Int, maturity_exclude? : Array[String]) -> Self
+
 type RegistryOverview derive(@debug.Debug, @json.FromJson)
 
 type RegistryVersion derive(@debug.Debug, @json.FromJson)
@@ -216,6 +241,7 @@ pub fn ReleaseOptions::ReleaseOptions(Int64, Int, maturity_exclude? : Array[Stri
 pub struct Selection {
   // private fields
 }
+pub fn Selection::items(Self) -> Array[(String, String, String)]
 
 pub struct SemVer {
   major : Int

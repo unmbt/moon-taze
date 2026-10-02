@@ -1,6 +1,6 @@
 # unmbt/moon-taze
 
-检查 MoonBit 项目已有依赖的新版本，并按需更新 `moon.mod`。当前为 **P2 早期实验版**：已支持显式 `moon.work` 成员、递归发现、静态配置、跨模块本地依赖识别和 JSON v1 基础报告；Windows x86_64 已验证常规写回，Linux/macOS 尚未运行验收。
+检查 MoonBit 项目已有依赖的新版本，并按需更新 `moon.mod`。当前为 **P3a 早期实验版**：已支持显式 `moon.work` 成员、递归发现、静态配置、跨模块本地依赖识别、JSON v1、固定时钟发布时间策略和正式库生命周期回调；Windows x86_64 已验证常规写回，Linux/macOS 尚未运行验收。
 
 ## 使用
 
@@ -12,7 +12,7 @@ moon run --target native cmd/main -- patch -C "path/to/project" --write
 
 `moon build --target native` 生成独立 CLI；Windows 默认产物为 `_build/native/debug/build/cmd/main/main.exe`。
 
-- 模式：`default`、`minor`、`patch`、`major`、`latest`、`stable`，沿用 [版本策略](docs/sdd/design.md#d-05)。显示的是清单声明版本。
+- 模式：`default`、`minor`、`patch`、`major`、`latest`、`stable`、`newest`、`next`，沿用 [版本策略](docs/sdd/design.md#d-05)。显示的是清单声明版本。
 - `-C/--cwd` 指定起点，向上寻找单模块清单；`-a/--all` 显示无更新和跳过的依赖。
 - `-n/--include`、`-x/--exclude` 过滤已有依赖；排除优先。`-l/--include-locked` 保留兼容用法，裸版本默认已参与检查。
 - `-w/--write` 应用所有推荐更新；不传时仅预览。`-r/--recursive` 扫描当前范围内的 `moon.mod`；工作区根目录按 `moon.work` 显式成员检查。`moon-taze.json` 可提供 `mode`、`recursive`、`all`、`include` 和 `exclude`，命令行值优先。不运行安装命令或 `moon fmt`，不会自动升级工具链。
@@ -31,9 +31,9 @@ moon run --target native cmd/main -- patch -C "path/to/project" --write
 
 ## 实验性库接口
 
-根包新增 `Selection`、`ApplyReport` 和 `apply(plan, selection)`。`plan.recommended_selection()` 选择全部推荐更新；`plan.selection([(manifest, dependency, target)])` 选择具体依赖，空数组表示不选择。路径使用该计划结果中的 `dependency.manifest`。
+根包提供 `Policy`、纯 `resolve`、`Callbacks`、`Selection`、`ApplyReport` 和 `apply(plan, selection, callbacks?)`。`plan.recommended_selection()` 选择全部推荐更新；`plan.selection([(manifest, dependency, target)])` 选择具体依赖，空数组表示不选择。`Selection::items()` 返回副本，路径使用该计划结果中的 `dependency.manifest`。check 回调按 `after_discovery`、`dependency_resolved` 顺序执行；apply 回调按 `before_apply`、`file_applied`、`after_run` 执行。回调返回空字符串表示接受，返回非空消息会生成 `callback_failed` 或 `callback_denied` 诊断，并保留已发生的写入报告。
 
-P1a 调用方需将 `plan.changes`、`plan.diagnostics`、`plan.has_errors` 改为 `plan.changes()`、`plan.diagnostics()`、`plan.has_errors()`。数组访问器返回副本；计划保存私有源码快照，选择绑定其所属计划，不能用 JSON 重放。`check_manifest` 会重新解析源码，因此无法通过修改 `Manifest.dependencies` 丢弃解析错误。完整 Services/Callbacks 接口仍留待 P3a。
+P1a 调用方需将 `plan.changes`、`plan.diagnostics`、`plan.has_errors` 改为 `plan.changes()`、`plan.diagnostics()`、`plan.has_errors()`。数组访问器返回副本；计划保存私有源码快照，选择绑定其所属计划，不能用 JSON 重放。`check_manifest` 会重新解析源码，因此无法通过修改 `Manifest.dependencies` 丢弃解析错误。完整可替换 Services 端口和 TUI 仍留待后续阶段；当前正式回调契约不暴露内部写入类型。
 
 `CheckPlan` 不再直接派生 `Eq`/`Debug`；需要比较或调试时使用访问器返回的公开结果，避免暴露私有源码快照。
 
