@@ -12,6 +12,15 @@ import {
 
 pkgtype(kind: "executable")
 
+supported_targets = "native"
+
 options(
   "native-stub": [ "interactive_native.c" ],
+  "pre-build": [
+    {
+      "input": "../../moon.mod",
+      "output": "embedded_mod.mbt",
+      "command": ":embed -i $input -o $output --name moon_mod",
+    },
+  ],
 )

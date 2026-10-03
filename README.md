@@ -2,15 +2,51 @@
 
 检查 MoonBit 项目已有依赖的新版本，并按需更新 `moon.mod`。当前为 **P4 验证版**：已支持显式 `moon.work` 成员、递归发现、静态配置、跨模块本地依赖识别、JSON v1、Mooncakes 版本详情时间、固定时钟发布时间策略、timediff/time sort、正式库生命周期回调和 `-I/--interactive` 依赖选择；Windows x86_64 已完成 Native 验证，Linux/macOS 由 CI 矩阵执行，尚未取得本轮运行证据。
 
+## 安装
+
+推荐使用 MoonBit 包管理器安装 CLI：
+
+```sh
+moon install unmbt/moon-taze/cmd/moon-taze
+moon-taze --version
+# 与 moon-bump 一致，-V 只输出裸版本号，便于脚本校验
+moon-taze -V
+```
+
+`moon install` 会把可执行文件放到 `~/.moon/bin`，请确保该目录已加入 `PATH`。
+
+也可以直接安装 GitHub Release 的预编译版本：
+
+```sh
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/unmbt/moon-taze/master/scripts/install.sh | bash
+
+# Windows PowerShell
+irm https://raw.githubusercontent.com/unmbt/moon-taze/master/scripts/install.ps1 | iex
+```
+
+脚本按当前平台和架构下载对应的 `moon-taze-*` 资产，安装到 `~/.unmbt`，并提供 `uninstall`/`-Uninstall` 清理选项。
+
+推送形如 `v0.1.0` 的 Git tag 会触发 CI：矩阵构建 Linux、macOS 和 Windows 资产，校验 tag 与 `moon.mod` 版本一致，随后发布 Mooncakes 并创建 GitHub Release。Release 资产名称为 `moon-taze-linux-amd64`、`moon-taze-macos-arm64` 和 `moon-taze-windows-amd64.exe`。
+
+维护者发版沿用 `moon-bump`：
+
+```sh
+moon install unmbt/moon-bump/cmd/moon-bump
+moon-bump patch
+```
+
+`moon-bump` 更新版本、提交并推送 `v*` tag 后，上述 CI 自动完成构建、Mooncakes 发布和 GitHub Release。
+
 ## 使用
 
 ```sh
-moon run --target native cmd/main -- --help
-moon run --target native cmd/main -- patch -C "path/to/project"
-moon run --target native cmd/main -- patch -C "path/to/project" --write
+moon run --target native cmd/moon-taze -- --help
+moon run --target native cmd/moon-taze -- patch -C "path/to/project"
+moon run --target native cmd/moon-taze -- patch -C "path/to/project" --write
 ```
 
-`moon build --target native` 生成独立 CLI；Windows 默认产物为 `_build/native/debug/build/cmd/main/main.exe`。
+`moon build --target native` 生成独立 CLI；Windows 默认产物为 `_build/native/debug/build/cmd/moon-taze/moon-taze.exe`。
 
 P4 发布检查可运行 `moon run --target native tools/p4_release_check.mbtx`；追加 `--online` 会执行 HTTPS/进程/终端探针。该检查不修改项目清单。
 

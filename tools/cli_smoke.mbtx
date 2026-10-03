@@ -9,7 +9,15 @@ import {
 async fn main {
   let args = @env.args()
   let cwd = @env.current_dir().unwrap()
-  let executable = args.get(1).unwrap_or(cwd + "/_build/native/debug/build/cmd/main/main.exe")
+  let executable_base = cwd + "/_build/native/debug/build/cmd/moon-taze/moon-taze"
+  let default_executable = if @env.get_env_var("OS") == Some("Windows_NT") {
+    executable_base + ".exe"
+  } else if @fs.exists(executable_base) {
+    executable_base
+  } else {
+    executable_base + ".exe"
+  }
+  let executable = args.get(1).unwrap_or(default_executable)
   let root = @fs.tmpdir(prefix="moon-taze-cli-smoke")
   defer @fs.rmdir(root, recursive=true)
   let path = root + "/moon.mod"
@@ -20,6 +28,7 @@ async fn main {
   for (arguments, expected) in [
     (["--help"], 0),
     (["--version"], 0),
+    (["-V"], 0),
     (["patch", "-C", root], 0),
     (["patch", "-C", root, "-w"], 0),
     (["--unknown"], 2),

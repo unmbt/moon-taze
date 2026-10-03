@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "unmbt/moon-taze/cmd/main"
+package "unmbt/moon-taze/cmd/moon-taze"
 
 // Values
 

@@ -1,0 +1,125 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: moon-taze-linux-amd64
+          - os: macos-latest
+            artifact_name: moon-taze-macos-arm64
+          - os: windows-latest
+            artifact_name: moon-taze-windows-amd64.exe
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup MoonBit
+        uses: hustcer/setup-moonbit@v1
+
+      - name: Update Registry & Dependencies
+        run: moon update
+
+      - name: Test
+        run: moon test --target native
+
+      - name: Check
+        run: moon check --target native
+
+      - name: Build Release
+        run: moon build --target native --release
+
+      - name: Prepare Artifact
+        shell: bash
+        run: |
+          binary="_build/native/release/build/cmd/moon-taze/moon-taze"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            binary="${binary}.exe"
+          elif [ ! -f "$binary" ] && [ -f "${binary}.exe" ]; then
+            binary="${binary}.exe"
+          fi
+          test -f "$binary"
+          cp "$binary" "${{ matrix.artifact_name }}"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+          retention-days: 7
+
+  publish:
+    name: Publish to mooncakes.io
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup MoonBit
+        uses: hustcer/setup-moonbit@v1
+
+      - name: Update Registry & Dependencies
+        run: moon update
+
+      - name: Verify Tag Version
+        shell: bash
+        run: |
+          module_version="$(moon -q run cmd/moon-taze -- -V)"
+          if [ "v${module_version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match moon.mod version ${module_version}."
+            exit 1
+          fi
+
+      - name: Configure Mooncakes Credentials
+        shell: bash
+        env:
+          MOONCAKES_CREDENTIALS: ${{ secrets.MOONCAKES_CREDENTIALS }}
+        run: |
+          if [ -z "${MOONCAKES_CREDENTIALS}" ]; then
+            echo "MOONCAKES_CREDENTIALS is not configured."
+            exit 1
+          fi
+          install -d -m 700 "${HOME}/.moon"
+          printf '%s' "${MOONCAKES_CREDENTIALS}" > "${HOME}/.moon/credentials.json"
+          chmod 600 "${HOME}/.moon/credentials.json"
+
+      - name: Publish Module
+        run: moon publish
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

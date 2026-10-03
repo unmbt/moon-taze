@@ -15,15 +15,15 @@ version = "0.1.0"
 
 readme = "README.md"
 
-repository = ""
+repository = "https://github.com/unmbt/moon-taze"
 
 license = "MIT"
 
-keywords = [ ]
+keywords = [ "cli", "dependency", "moonbit", "mooncakes" ]
 
 preferred_target = "native"
 
-description = ""
+description = "A reliable interactive dependency update tool for MoonBit projects."
 
 import {
   "moonbitlang/async@0.21.3",

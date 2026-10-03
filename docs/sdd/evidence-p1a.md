@@ -27,7 +27,7 @@
 
 命令：
 
-- `moon run --target native cmd/main -- --help`
+- `moon run --target native cmd/moon-taze -- --help`
 - 直接运行 Native 产物并传入未知选项，退出码为 2；`--write`、工作区、递归、JSON、时间模式等阶段性选项也返回 2。
 - `--include/--exclude` 在 Registry 查询前应用；名称过滤显示 `skipped`，非法选择器退出 2。
 - 临时 `moon.mod` fixture 上执行 `major -C <fixture>`，真实 Mooncakes 输出 `moonbitlang/async 0.21.3 -> 0.22.1 (major)`；响应中的 `yanked_reason: null` 已按 JSON null 正确解码。

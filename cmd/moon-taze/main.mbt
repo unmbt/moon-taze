@@ -3,10 +3,19 @@ fn usage() -> String {
   let text =
     #|moon-taze [default|major|minor|patch|latest|stable|newest|next] [options]
     #|
-    #|Options: -C/--cwd, -w/--write, -I/--interactive, -a/--all, -r/--recursive, --json, --silent, --group/--no-group, --sort, --timediff/--no-timediff, --maturity-period, --maturity-period-exclude, --verify, --fail-on-outdated, --retry, --no-retry, -f/--force, --no-force, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, --version.
+    #|Options: -C/--cwd, -w/--write, -I/--interactive, -a/--all, -r/--recursive, --json, --silent, --group/--no-group, --sort, --timediff/--no-timediff, --maturity-period, --maturity-period-exclude, --verify, --fail-on-outdated, --retry, --no-retry, -f/--force, --no-force, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, -V/--version.
     #|Default is read-only. --write applies all recommended updates to one moon.mod.
     #|--interactive selects dependencies and candidates, then confirms before applying.
   text
+}
+
+///|
+fn app_version() -> String {
+  let marker = "version = \""
+  guard moon_mod.find(marker) is Some(start) else { return "unknown" }
+  let rest = moon_mod[start + marker.length():]
+  guard rest.find("\"") is Some(length) else { return "unknown" }
+  rest[:length].to_owned()
 }
 
 ///|
@@ -1048,8 +1057,12 @@ async fn run_cli_inner(
     emit(usage())
     return 0
   }
+  if args.length() == 2 && args[1] == "-V" {
+    emit(app_version())
+    return 0
+  }
   if args.length() == 2 && args[1] == "--version" {
-    emit("moon-taze 0.1.0-p4")
+    emit("moon-taze {app_version()}")
     return 0
   }
   let mut mode = @taze.UpdateMode::Default
