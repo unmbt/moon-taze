@@ -5,7 +5,7 @@ fn usage() -> String {
     #|
     #|Options: -C/--cwd, -w/--write, -I/--interactive, -a/--all, -r/--recursive, --json, --silent, --group/--no-group, --sort, --timediff/--no-timediff, --maturity-period, --maturity-period-exclude, --verify, --fail-on-outdated, --retry, --no-retry, -f/--force, --no-force, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, -V/--version.
     #|Default is read-only. --write applies all recommended updates to one moon.mod.
-    #|--interactive selects dependencies and candidates, then confirms before applying.
+    #|--interactive opens the taze-style keyboard UI: arrows move, space toggles, right selects a version, and Enter applies.
   text
 }
 
@@ -28,8 +28,31 @@ extern "C" fn moon_taze_stdin_isatty() -> Bool = "moon_taze_stdin_isatty"
 
 ///|
 #cfg(target="native")
+extern "C" fn moon_taze_interactive_start() -> Int = "moon_taze_interactive_start"
+
+///|
+#cfg(target="native")
+extern "C" fn moon_taze_interactive_stop() = "moon_taze_interactive_stop"
+
+///|
+#cfg(target="native")
 fn interactive_terminal_available() -> Bool {
   moon_taze_stdin_isatty()
+}
+
+///|
+fn interactive_start_raw() -> Unit raise {
+  let code = moon_taze_interactive_start()
+  if code != 0 {
+    cli_error(
+      "interactive_terminal: unable to enter raw input mode (native error {code})",
+    )
+  }
+}
+
+///|
+fn interactive_stop_raw() -> Unit {
+  moon_taze_interactive_stop()
 }
 
 ///|
@@ -351,77 +374,207 @@ fn format_time_diff(current : Int64?, target : Int64?) -> String {
 }
 
 ///|
-async fn interactive_read_line() -> String? {
-  @stdio.stdin.read_until("\n") catch {
-    _ => None
-  }
-}
-
-///|
-fn interactive_indices(line : String, count : Int) -> Array[Int] raise {
-  let value = line.trim().to_owned()
-  if value == "a" || value == "A" {
-    let result : Array[Int] = []
-    for index in 0..<count {
-      result.push(index)
+async fn interactive_key() -> String? {
+  let first = @stdio.stdin.read_exactly(1) catch { _ => return None }
+  if first[0] == 0x1b {
+    let second = @stdio.stdin.read_exactly(1) catch {
+      _ => return Some("escape")
     }
-    return result
-  }
-  if value == "" {
-    cli_error("interactive_invalid_selection: choose at least one dependency")
-  }
-  let result : Array[Int] = []
-  for part in value.split(",") {
-    let token = part.trim().to_owned()
-    let parsed = @string.parse_int(token) catch { _ => -1 }
-    if parsed < 1 || parsed > count {
-      cli_error(
-        "interactive_invalid_selection: invalid dependency number {token}",
+    if second[0] == b'[' {
+      let third = @stdio.stdin.read_exactly(1) catch {
+        _ => return Some("escape")
+      }
+      return Some(
+        match third[0] {
+          b'A' => "up"
+          b'B' => "down"
+          b'C' => "right"
+          b'D' => "left"
+          _ => "escape"
+        },
       )
     }
-    let index = parsed - 1
-    if !result.contains(index) {
-      result.push(index)
-    }
+    return Some("escape")
   }
-  result
+  if first[0] == 0x00 || first[0] == 0xe0 {
+    let second = @stdio.stdin.read_exactly(1) catch { _ => return None }
+    return Some(
+      match second[0] {
+        0x48 => "up"
+        0x50 => "down"
+        0x4d => "right"
+        0x4b => "left"
+        _ => "other"
+      },
+    )
+  }
+  Some(
+    match first[0] {
+      3 => "escape"
+      b'\r' | b'\n' => "enter"
+      b' ' => "space"
+      b'a' | b'A' => "all"
+      b'q' | b'Q' => "escape"
+      b'h' | b'H' => "left"
+      b'j' | b'J' => "down"
+      b'k' | b'K' => "up"
+      b'l' | b'L' => "right"
+      _ => "other"
+    },
+  )
 }
 
 ///|
-fn interactive_target(
+async fn interactive_screen(text : String) -> Unit {
+  @stdio.stdout.write(@utf8.encode("\u001b[2J\u001b[H" + text))
+}
+
+///|
+fn interactive_change_line(
   change : @taze.DependencyChange,
-  line : String,
-) -> String? raise {
-  let value = line.trim().to_owned()
-  let target = change.target.unwrap_or("")
-  if value == "" {
-    if target == "" {
-      cli_error(
-        "interactive_invalid_candidate: dependency has no recommended candidate",
-      )
-    }
-    return Some(target)
-  }
-  if value == "q" || value == "Q" {
-    return None
-  }
-  let parsed = @string.parse_int(value) catch { _ => 0 }
-  if parsed >= 1 && parsed <= change.candidates.length() {
-    return Some(change.candidates[parsed - 1])
-  }
-  if change.candidates.contains(value) {
-    return Some(value)
-  }
-  if value == target {
-    return Some(value)
-  }
-  cli_error("interactive_invalid_candidate: invalid candidate \{value}")
-  None
+  target : String,
+  selected : Bool,
+  checked : Bool,
+) -> String {
+  let pointer = if selected { "❯" } else { " " }
+  let mark = if checked { "◉" } else { "◌" }
+  let suffix = if checked { "" } else { " (skipped)" }
+  "\{pointer} \{mark} \{change.dependency.name}  \{change.dependency.version} → \{target}\{suffix}"
 }
 
 ///|
-/// Drive the small line-oriented TUI.  All writes remain behind the final
-/// confirmation and the returned selection is still validated by `apply`.
+async fn interactive_render_list(
+  changes : Array[@taze.DependencyChange],
+  targets : Array[String],
+  checked : Array[Bool],
+  selected : Int,
+) -> Unit {
+  let lines : Array[String] = [
+    "┃ ↑↓ select  space toggle  → change version", "┃ enter confirm  esc cancel  a select/unselect all",
+    "",
+  ]
+  for index, change in changes {
+    lines.push(
+      interactive_change_line(
+        change,
+        targets[index],
+        index == selected,
+        checked[index],
+      ),
+    )
+  }
+  interactive_screen(lines.join("\n") + "\n")
+}
+
+///|
+async fn interactive_render_versions(
+  change : @taze.DependencyChange,
+  versions : Array[String],
+  selected : Int,
+) -> Unit {
+  let lines : Array[String] = [
+    "┃ Select a version for \{change.dependency.name} (current \{change.dependency.version})",
+    "┃ ↑↓ select  enter confirm  esc cancel",
+    "",
+  ]
+  for index, version in versions {
+    let pointer = if index == selected { "❯" } else { " " }
+    lines.push("\{pointer} \{version}")
+  }
+  interactive_screen(lines.join("\n") + "\n")
+}
+
+///|
+async fn interactive_version_loop(
+  change : @taze.DependencyChange,
+  versions : Array[String],
+  selected : Int,
+) -> Int? {
+  let mut index = selected
+  for ;; {
+    interactive_render_versions(change, versions, index)
+    match interactive_key() {
+      None => return None
+      Some("escape") | Some("left") => return None
+      Some("up") => index = (index - 1 + versions.length()) % versions.length()
+      Some("down") => index = (index + 1) % versions.length()
+      Some("enter") | Some("right") => return Some(index)
+      _ => ()
+    }
+  }
+}
+
+///|
+async fn interactive_list_loop(
+  plan : @taze.CheckPlan,
+  changes : Array[@taze.DependencyChange],
+  targets : Array[String],
+  checked : Array[Bool],
+  selected : Int,
+) -> @taze.Selection? {
+  let mut index = selected
+  for ;; {
+    interactive_render_list(changes, targets, checked, index)
+    match interactive_key() {
+      None | Some("escape") => {
+        interactive_screen("\u001b[?25h")
+        return None
+      }
+      Some("up") => index = (index - 1 + changes.length()) % changes.length()
+      Some("down") => index = (index + 1) % changes.length()
+      Some("space") => checked[index] = !checked[index]
+      Some("all") => {
+        let all = checked.all(value => value)
+        for i in 0..<checked.length() {
+          checked[i] = !all
+        }
+      }
+      Some("right") => {
+        let change = changes[index]
+        let versions : Array[String] = []
+        let target = targets[index]
+        if target != "" {
+          versions.push(target)
+        }
+        for version in change.candidates {
+          if !versions.contains(version) {
+            versions.push(version)
+          }
+        }
+        if !versions.is_empty() {
+          match interactive_version_loop(change, versions, 0) {
+            Some(version_index) => {
+              targets[index] = versions[version_index]
+              checked[index] = true
+            }
+            None => ()
+          }
+        }
+      }
+      Some("enter") => {
+        let items : Array[(String, String, String)] = []
+        for i, item in changes {
+          if checked[i] {
+            items.push(
+              (item.dependency.manifest, item.dependency.name, targets[i]),
+            )
+          }
+        }
+        interactive_screen("\u001b[?25h")
+        if items.is_empty() {
+          return None
+        }
+        return Some(plan.selection(items))
+      }
+      _ => ()
+    }
+  }
+}
+
+///|
+/// Reproduce taze's keyboard-driven list: updates start selected, space
+/// toggles entries, arrows navigate, right opens version selection, enter
+/// applies the checked entries, and escape cancels without writing.
 async fn interactive_selection(
   plan : @taze.CheckPlan,
   emit~ : (String) -> Unit,
@@ -435,73 +588,14 @@ async fn interactive_selection(
     emit("No updates available")
     return None
   }
-  emit("Interactive mode: available updates")
-  for index, change in changes {
-    let target = change.target.unwrap_or("?")
-    emit(
-      "\{index + 1}) \{change.dependency.name} \{change.dependency.version} -> \{target}",
-    )
-    if !change.candidates.is_empty() {
-      emit("   candidates: \{change.candidates.join(", ")}")
-    }
-  }
-  emit("Select dependencies (numbers separated by comma, a=all, q=cancel):")
-  let selected_line = match interactive_read_line() {
-    Some(value) => value
-    None => {
-      emit("cancelled")
-      return None
-    }
-  }
-  let trimmed = selected_line.trim().to_owned()
-  if trimmed == "q" || trimmed == "Q" {
-    emit("cancelled")
-    return None
-  }
-  let selected_indices = interactive_indices(selected_line, changes.length())
-  let items : Array[(String, String, String)] = []
-  for index in selected_indices {
-    let change = changes[index]
-    let mut target = change.target.unwrap_or("")
-    if change.candidates.length() > 1 {
-      emit(
-        "Candidate for \{change.dependency.name} (number, version, or Enter for \{target}):",
-      )
-      let candidate_line = match interactive_read_line() {
-        Some(value) => value
-        None => {
-          emit("cancelled")
-          return None
-        }
-      }
-      match interactive_target(change, candidate_line) {
-        Some(value) => target = value
-        None => {
-          emit("cancelled")
-          return None
-        }
-      }
-    }
-    items.push((change.dependency.manifest, change.dependency.name, target))
-  }
-  if items.is_empty() {
-    emit("cancelled")
-    return None
-  }
-  emit("Apply \{items.length()} selected update(s)? [y/N]")
-  let confirmation = match interactive_read_line() {
-    Some(value) => value.trim().to_owned()
-    None => ""
-  }
-  if confirmation == "y" ||
-    confirmation == "Y" ||
-    confirmation == "yes" ||
-    confirmation == "YES" {
-    Some(plan.selection(items))
-  } else {
-    emit("cancelled")
-    None
-  }
+  interactive_start_raw()
+  defer interactive_stop_raw()
+  let targets = changes.map(change => {
+    change.target.unwrap_or(change.dependency.version)
+  })
+  let checked = Array::make(changes.length(), true)
+  interactive_screen("\u001b[?25l")
+  interactive_list_loop(plan, changes, targets, checked, 0)
 }
 
 ///|
@@ -1582,7 +1676,7 @@ async fn run_cli_inner(
   )
   let mut grouped_manifest : String? = None
   for change in changes {
-    if json_output || silent {
+    if json_output || silent || interactive {
       continue
     }
     if group_output && grouped_manifest != Some(change.dependency.manifest) {
@@ -1622,6 +1716,13 @@ async fn run_cli_inner(
         }
       Error => ()
     }
+  }
+  if !json_output &&
+    !silent &&
+    !interactive &&
+    !write &&
+    changes.any(change => change.status is UpdateAvailable) {
+    emit("Run with --write (or -w) to apply these updates.")
   }
   if plan.has_errors() {
     if json_output {

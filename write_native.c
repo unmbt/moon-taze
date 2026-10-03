@@ -135,7 +135,11 @@ MOONBIT_FFI_EXPORT int32_t moon_taze_copy_permissions(moonbit_bytes_t source, mo
   wchar_t *src = wide(source); if (!src) return (int32_t)GetLastError();
   wchar_t *dst = wide(temporary); if (!dst) { DWORD err = GetLastError(); free(src); return (int32_t)err; }
   DWORD size = 0;
-  SECURITY_INFORMATION flags = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+  // Reading or assigning owner/group metadata requires WRITE_OWNER privileges
+  // that ordinary users do not have on otherwise writable files.  The DACL is
+  // the permission metadata needed for a normal replacement and can be copied
+  // by the file owner without elevating the CLI.
+  SECURITY_INFORMATION flags = DACL_SECURITY_INFORMATION;
   GetFileSecurityW(src, flags, NULL, 0, &size);
   DWORD err = GetLastError();
   if (err != ERROR_INSUFFICIENT_BUFFER || !size) { free(src); free(dst); return (int32_t)err; }

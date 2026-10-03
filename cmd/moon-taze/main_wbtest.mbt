@@ -138,6 +138,7 @@ async test "CLI preview write filtered update and repeat are offline and isolate
   assert_eq(@fs.read_file(path).binary(), source)
   assert_eq(@fs.readdir(root, include_hidden=true).length(), 1)
   assert_true(output.any(line => line.contains("1.0.0 -> 1.0.12")))
+  assert_true(output.any(line => line.contains("--write")))
   output.clear()
   assert_eq(
     run_cli(

@@ -227,7 +227,7 @@ moon-taze -I --maturity-period 7
 | `--ignore-other-workspaces` / `--no-ignore-other-workspaces` | true |
 | `--include, -n <selectors>` / `--exclude, -x <selectors>` | 空；含义见 D-05 |
 | `--write, -w` | false；选择所有合格目标 |
-| `--interactive, -I` | false；手动选择并确认才应用 |
+| `--interactive, -I` | false；键盘选择并按 Enter 应用，Esc/q 取消 |
 | `--all, -a` | false；显示无更新和跳过项 |
 | `--json` | false；有此参数强制禁用交互 |
 | `--fail-on-outdated` | false；按初始计划是否存在可更新项计算 |
@@ -357,7 +357,7 @@ JSON 项目和依赖按路径、名称稳定排序，不随 `--sort` 改变；`-
 <a id="d-09"></a>
 ## D-09 应用计划与文件完整性
 
-P1b Native 实施：Windows 通过 `SetFileInformationByHandle(FileRenameInfoEx)` 同目录替换，显式复制 owner/group/DACL；没有 copy/delete 降级。POSIX 适配复制 owner/group/mode 及扩展权限元数据后 rename，尚未实机验收。临时内容写入前限制权限，写入后再次恢复权限并同步。锁和临时文件记录本次运行 ID/文件身份，清理时核对身份；遗留文件不按时间自动接管，未知临时文件保留。此处的权限保留不意味着保留所有文件属性、附加数据流或审计 SACL。
+P1b Native 实施：Windows 通过 `SetFileInformationByHandle(FileRenameInfoEx)` 同目录替换，并复制可由普通文件所有者读取/设置的 DACL；不请求需要额外 `WRITE_OWNER` 权限的 owner/group 元数据，也没有 copy/delete 降级。POSIX 适配复制 owner/group/mode 及扩展权限元数据后 rename，尚未实机验收。临时内容写入前限制权限，写入后再次恢复权限并同步。锁和临时文件记录本次运行 ID/文件身份，清理时核对身份；遗留文件不按时间自动接管，未知临时文件保留。此处的权限保留不意味着保留所有文件属性、附加数据流或审计 SACL。
 
 应用输入必须来自本次 `check` 的有效计划，不支持反序列化任意 JSON 作为计划。逐项验证选择属于候选、没有重复实例、没有降级、没有重叠修改区间。空选择成功且零 IO 写入；整体检查错误仍不能通过空选择掩盖。
 

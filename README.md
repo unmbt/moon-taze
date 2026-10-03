@@ -54,7 +54,7 @@ P4 发布检查可运行 `moon run --target native tools/p4_release_check.mbtx`�
 - `-C/--cwd` 指定起点，向上寻找单模块清单；`-a/--all` 显示无更新和跳过的依赖。
 - `-n/--include`、`-x/--exclude` 过滤已有依赖；排除优先。`-l/--include-locked` 保留兼容用法，裸版本默认已参与检查。
 - `-w/--write` 应用所有推荐更新；不传时仅预览。`-r/--recursive` 扫描当前范围内的 `moon.mod`；工作区根目录按 `moon.work` 显式成员检查。`moon-taze.json` 可提供 `mode`、`recursive`、`all`、`include` 和 `exclude`，命令行值优先。不运行安装命令或 `moon fmt`，不会自动升级工具链。
-- `-I/--interactive` 需要 TTY，先选择依赖和候选版本，再确认后写回；输入 `q` 或确认不是 `y` 会取消且不写入。`--json` 优先跳过交互，保持机器可读输出。
+- `-I/--interactive` 需要 TTY，行为与 taze 一致：更新项默认选中，`↑/↓` 或 `j/k` 移动，空格切换，`a` 全选/取消全选，`→` 或 `l` 选择候选版本，`Enter` 应用已选项，`Esc/q` 取消且不写入。`--json` 优先跳过交互，保持机器可读输出。
 
 缓存支持用户缓存目录中的版本化 `cache-v1.json`，TTL 为 30 分钟；`--force` 会绕过并刷新，损坏或过期缓存会回退到联网查询。瞬时 Registry 错误支持有界重试、指数退避和可解析的 `Retry-After`。文本输出支持 `--silent`、`--group/--no-group` 和 `--sort`；`time-asc/time-desc` 使用版本详情的真实发布时间。P3 新增 `newest`、`next`、`--maturity-period`、`--maturity-period-exclude` 和 `--timediff`，通过 Mooncakes 详情的 UTC 发布时间按固定时钟选择候选并输出 JSON 时间字段；缺少可靠发布时间时会返回明确诊断。`-w --verify` 会在实际写入后按模块运行 `moon check`，失败返回 2 并保留应用报告。旧 `moon.mod.json` 不自动迁移；工作区成员依赖标记为 `local_workspace`，不会访问 Registry。
 

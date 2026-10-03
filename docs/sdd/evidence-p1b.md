@@ -75,5 +75,5 @@ moon run --target native tools/validate_write_native.mbtx -- `
 - `CheckPlan` 字段迁移为访问器，新增 `Selection`、`ApplyReport`、`apply`；完整库 API 稳定承诺仍在 P3a。公共类型归属根包，IO 端口与 FFI 保持私有。
 - Windows 已实测普通及受保护 ACL 的替换，旧系统不支持所需替换原语时直接失败，不回退到删除或截断原文件。
 - POSIX 分支已提供 owner/group/mode 与扩展权限复制，但 Linux/macOS 未实机运行，尚不声明支持。
-- Windows owner/group/DACL 的保留不意味着审计 SACL、附加数据流、所有属性和时间戳都保留。替换仅承诺文件内容完整，不承诺跨文件事务或断电持久性。
+- Windows DACL 的保留不意味着 owner/group、审计 SACL、附加数据流、所有属性和时间戳都保留。替换仅承诺文件内容完整，不承诺跨文件事务或断电持久性。
 - 编译器仍提示既有保留字、冗余修饰符、隐式 trait promotion 等 warning；依赖 C 代码亦有既有 `EINVAL` 宏重定义 warning。测试及构建均无错误。
