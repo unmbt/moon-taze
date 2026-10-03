@@ -1,6 +1,6 @@
 # unmbt/moon-taze
 
-检查 MoonBit 项目已有依赖的新版本，并按需更新 `moon.mod`。当前为 **P3b 实验版**：已支持显式 `moon.work` 成员、递归发现、静态配置、跨模块本地依赖识别、JSON v1、Mooncakes 版本详情时间、固定时钟发布时间策略、timediff/time sort、正式库生命周期回调和 `-I/--interactive` 依赖选择；Windows x86_64 已验证常规写回，Linux/macOS 尚未运行验收。
+检查 MoonBit 项目已有依赖的新版本，并按需更新 `moon.mod`。当前为 **P4 验证版**：已支持显式 `moon.work` 成员、递归发现、静态配置、跨模块本地依赖识别、JSON v1、Mooncakes 版本详情时间、固定时钟发布时间策略、timediff/time sort、正式库生命周期回调和 `-I/--interactive` 依赖选择；Windows x86_64 已完成 Native 验证，Linux/macOS 由 CI 矩阵执行，尚未取得本轮运行证据。
 
 ## 使用
 
@@ -11,6 +11,8 @@ moon run --target native cmd/main -- patch -C "path/to/project" --write
 ```
 
 `moon build --target native` 生成独立 CLI；Windows 默认产物为 `_build/native/debug/build/cmd/main/main.exe`。
+
+P4 发布检查可运行 `moon run --target native tools/p4_release_check.mbtx`；追加 `--online` 会执行 HTTPS/进程/终端探针。该检查不修改项目清单。
 
 - 模式：`default`、`minor`、`patch`、`major`、`latest`、`stable`、`newest`、`next`，沿用 [版本策略](docs/sdd/design.md#d-05)。显示的是清单声明版本。
 - `-C/--cwd` 指定起点，向上寻找单模块清单；`-a/--all` 显示无更新和跳过的依赖。

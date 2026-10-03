@@ -1049,7 +1049,7 @@ async fn run_cli_inner(
     return 0
   }
   if args.length() == 2 && args[1] == "--version" {
-    emit("moon-taze 0.1.0-p3")
+    emit("moon-taze 0.1.0-p4")
     return 0
   }
   let mut mode = @taze.UpdateMode::Default

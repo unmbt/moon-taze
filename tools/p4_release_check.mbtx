@@ -1,0 +1,53 @@
+import {
+  "moonbitlang/async@0.21.3",
+  "moonbitlang/async@0.21.3/process",
+  "moonbitlang/core/env",
+}
+
+async fn run_step(
+  root : String,
+  label : String,
+  command : String,
+  arguments : Array[String],
+) -> Unit {
+  let (code, stdout, stderr) = @process.collect_output(
+    command,
+    arguments,
+    inherit_env=true,
+    cwd=root,
+  )
+  println("[\{label}] exit=\{code}")
+  if code != 0 {
+    let out = stdout.text()
+    let err = stderr.text()
+    fail(
+      "P4 step failed: \{label}\nstdout:\n\{out}\nstderr:\n\{err}",
+    )
+  }
+}
+
+async fn main raise {
+  let root = @env.current_dir().unwrap_or(".")
+  let args = @env.args()
+  let online = args.any(value => value == "--online")
+  println("P4 Native release validation")
+  run_step(root, "moon-version", "moon", ["version"])
+  run_step(root, "moon-build-native", "moon", ["build", "--target", "native"])
+  run_step(root, "moon-check-native", "moon", ["check", "--target", "native"])
+  run_step(root, "moon-test-native", "moon", ["test", "--target", "native"])
+  run_step(
+    root,
+    "cli-smoke",
+    "moon",
+    ["run", "--target", "native", "tools/cli_smoke.mbtx"],
+  )
+  if online {
+    run_step(
+      root,
+      "native-online-probe",
+      "moon",
+      ["run", "--target", "native", "tools/native_probe.mbtx"],
+    )
+  }
+  println("P4 Native release validation: passed")
+}

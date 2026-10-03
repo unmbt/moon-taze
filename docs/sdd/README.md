@@ -1,6 +1,6 @@
 # moon-taze：规格驱动开发文档
 
-状态：P1a 只读闭环与 P1b 写回实现已核验；P2 的 T-06 工作区/递归/配置、T-07 版本化 TTL 缓存/有界重试与 Retry-After、T-08 JSON/CI 基础契约及文本排序/分组、T-12 非交互 verify 已接入。P3a 已接入固定时钟、发布时间选择、成熟期策略、Mooncakes 在线详情、timediff/time sort、纯 resolve、Selection 访问和 check/apply 生命周期回调；P3b 已接入行式 TUI、TTY 校验、依赖/候选选择、确认和取消。完整日志级别和平台验收仍待后续阶段。符号链接实机写入拒绝待权限环境复验。核验日期：2026-10-03。文档版本：0.5。证据见 [P1a](evidence-p1a.md)、[P1b](evidence-p1b.md)、[P2 首轮](evidence-p2.md)、[P3a](evidence-p3.md)、[P3b](evidence-p3b.md)。
+状态：P1a 只读闭环与 P1b 写回实现已核验；P2 的 T-06 工作区/递归/配置、T-07 版本化 TTL 缓存/有界重试与 Retry-After、T-08 JSON/CI 基础契约及文本排序/分组、T-12 非交互 verify 已接入。P3a 已接入固定时钟、发布时间选择、成熟期策略、Mooncakes 在线详情、timediff/time sort、纯 resolve、Selection 访问和 check/apply 生命周期回调；P3b 已接入行式 TUI、TTY 校验、依赖/候选选择、确认和取消。P4 已加入 Native 发布检查脚本和 Windows/Ubuntu/macOS CI 矩阵；当前只有 Windows 实机证据，Linux/macOS 等待 runner 验证。符号链接实机写入拒绝和 ASan 运行库限制保持单独记录。核验日期：2026-10-03。文档版本：0.6。证据见 [P1a](evidence-p1a.md)、[P1b](evidence-p1b.md)、[P2 首轮](evidence-p2.md)、[P3a](evidence-p3.md)、[P3b](evidence-p3b.md)、[P4](evidence-p4.md)。
 
 本项目将 taze 的依赖检查与更新体验适配到 MoonBit：读取项目已有依赖，从 Mooncakes 查询版本，生成更新计划，由用户预览或选择后写回。这里的 SDD 指 **Specification-Driven Development（规格驱动开发）**；技术设计是其中一部分。
 

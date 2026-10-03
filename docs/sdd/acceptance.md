@@ -1,6 +1,6 @@
 # 验收规格与需求追踪
 
-版本：0.3。状态：**P1a 与 P1b 常规子场景已执行，符号链接实机验收待权限环境，后续场景待实现**。下列内容仍是完整验收输入与期望；子场景通过不等于整个 AC 已通过。按 [推进路径](tasks.md#roadmap) 分阶段执行；每个 AC 的变体分别记录状态。阶段性“不支持”仅适用于当时产物：后续功能上线后改跑正向场景，P4 保留历史证据。运行结果见 [P1a](evidence-p1a.md)、[P1b](evidence-p1b.md)。
+版本：0.4。状态：**P1～P3 常规子场景及 P4 Windows 首轮已执行；Linux/macOS、符号链接权限和 ASan 运行库仍待环境验证**。下列内容仍是完整验收输入与期望；子场景通过不等于整个 AC 已通过。按 [推进路径](tasks.md#roadmap) 分阶段执行；每个 AC 的变体分别记录状态。阶段性“不支持”仅适用于当时产物：后续功能上线后改跑正向场景，P4 保留历史证据。运行结果见 [P1a](evidence-p1a.md)、[P1b](evidence-p1b.md)、[P2](evidence-p2.md)、[P3a](evidence-p3.md)、[P3b](evidence-p3b.md)、[P4](evidence-p4.md)。
 
 <a id="fixtures"></a>
 ## 1. 固定测试数据与隔离
