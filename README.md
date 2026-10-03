@@ -1,6 +1,6 @@
 # unmbt/moon-taze
 
-检查 MoonBit 项目已有依赖的新版本，并按需更新 `moon.mod`。当前为 **P3a 实验版**：已支持显式 `moon.work` 成员、递归发现、静态配置、跨模块本地依赖识别、JSON v1、Mooncakes 版本详情时间、固定时钟发布时间策略、timediff/time sort 和正式库生命周期回调；Windows x86_64 已验证常规写回，Linux/macOS 尚未运行验收。
+检查 MoonBit 项目已有依赖的新版本，并按需更新 `moon.mod`。当前为 **P3b 实验版**：已支持显式 `moon.work` 成员、递归发现、静态配置、跨模块本地依赖识别、JSON v1、Mooncakes 版本详情时间、固定时钟发布时间策略、timediff/time sort、正式库生命周期回调和 `-I/--interactive` 依赖选择；Windows x86_64 已验证常规写回，Linux/macOS 尚未运行验收。
 
 ## 使用
 
@@ -16,8 +16,9 @@ moon run --target native cmd/main -- patch -C "path/to/project" --write
 - `-C/--cwd` 指定起点，向上寻找单模块清单；`-a/--all` 显示无更新和跳过的依赖。
 - `-n/--include`、`-x/--exclude` 过滤已有依赖；排除优先。`-l/--include-locked` 保留兼容用法，裸版本默认已参与检查。
 - `-w/--write` 应用所有推荐更新；不传时仅预览。`-r/--recursive` 扫描当前范围内的 `moon.mod`；工作区根目录按 `moon.work` 显式成员检查。`moon-taze.json` 可提供 `mode`、`recursive`、`all`、`include` 和 `exclude`，命令行值优先。不运行安装命令或 `moon fmt`，不会自动升级工具链。
+- `-I/--interactive` 需要 TTY，先选择依赖和候选版本，再确认后写回；输入 `q` 或确认不是 `y` 会取消且不写入。`--json` 优先跳过交互，保持机器可读输出。
 
-缓存支持用户缓存目录中的版本化 `cache-v1.json`，TTL 为 30 分钟；`--force` 会绕过并刷新，损坏或过期缓存会回退到联网查询。瞬时 Registry 错误支持有界重试、指数退避和可解析的 `Retry-After`。文本输出支持 `--silent`、`--group/--no-group` 和 `--sort`；`time-asc/time-desc` 使用版本详情的真实发布时间。P3 新增 `newest`、`next`、`--maturity-period`、`--maturity-period-exclude` 和 `--timediff`，通过 Mooncakes 详情的 UTC 发布时间按固定时钟选择候选并输出 JSON 时间字段；缺少可靠发布时间时会返回明确诊断。`-w --verify` 会在实际写入后按模块运行 `moon check`，失败返回 2 并保留应用报告。TUI 仍未开放。旧 `moon.mod.json` 不自动迁移；工作区成员依赖标记为 `local_workspace`，不会访问 Registry。
+缓存支持用户缓存目录中的版本化 `cache-v1.json`，TTL 为 30 分钟；`--force` 会绕过并刷新，损坏或过期缓存会回退到联网查询。瞬时 Registry 错误支持有界重试、指数退避和可解析的 `Retry-After`。文本输出支持 `--silent`、`--group/--no-group` 和 `--sort`；`time-asc/time-desc` 使用版本详情的真实发布时间。P3 新增 `newest`、`next`、`--maturity-period`、`--maturity-period-exclude` 和 `--timediff`，通过 Mooncakes 详情的 UTC 发布时间按固定时钟选择候选并输出 JSON 时间字段；缺少可靠发布时间时会返回明确诊断。`-w --verify` 会在实际写入后按模块运行 `moon check`，失败返回 2 并保留应用报告。旧 `moon.mod.json` 不自动迁移；工作区成员依赖标记为 `local_workspace`，不会访问 Registry。
 
 ## 写回与恢复
 

@@ -3,15 +3,25 @@ fn usage() -> String {
   let text =
     #|moon-taze [default|major|minor|patch|latest|stable|newest|next] [options]
     #|
-    #|Options: -C/--cwd, -w/--write, -a/--all, -r/--recursive, --json, --silent, --group/--no-group, --sort, --timediff/--no-timediff, --maturity-period, --maturity-period-exclude, --verify, --fail-on-outdated, --retry, --no-retry, -f/--force, --no-force, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, --version.
+    #|Options: -C/--cwd, -w/--write, -I/--interactive, -a/--all, -r/--recursive, --json, --silent, --group/--no-group, --sort, --timediff/--no-timediff, --maturity-period, --maturity-period-exclude, --verify, --fail-on-outdated, --retry, --no-retry, -f/--force, --no-force, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, --version.
     #|Default is read-only. --write applies all recommended updates to one moon.mod.
-    #|Workspace members, recursive checks, JSON and non-interactive verify are supported.
+    #|--interactive selects dependencies and candidates, then confirms before applying.
   text
 }
 
 ///|
 #cfg(target="native")
 extern "C" fn terminate_process(code : Int) = "exit"
+
+///|
+#cfg(target="native")
+extern "C" fn moon_taze_stdin_isatty() -> Bool = "moon_taze_stdin_isatty"
+
+///|
+#cfg(target="native")
+fn interactive_terminal_available() -> Bool {
+  moon_taze_stdin_isatty()
+}
 
 ///|
 priv suberror CliError {
@@ -328,6 +338,160 @@ fn format_time_diff(current : Int64?, target : Int64?) -> String {
       }
     }
     _ => "unknown"
+  }
+}
+
+///|
+async fn interactive_read_line() -> String? {
+  @stdio.stdin.read_until("\n") catch {
+    _ => None
+  }
+}
+
+///|
+fn interactive_indices(line : String, count : Int) -> Array[Int] raise {
+  let value = line.trim().to_owned()
+  if value == "a" || value == "A" {
+    let result : Array[Int] = []
+    for index in 0..<count {
+      result.push(index)
+    }
+    return result
+  }
+  if value == "" {
+    cli_error("interactive_invalid_selection: choose at least one dependency")
+  }
+  let result : Array[Int] = []
+  for part in value.split(",") {
+    let token = part.trim().to_owned()
+    let parsed = @string.parse_int(token) catch { _ => -1 }
+    if parsed < 1 || parsed > count {
+      cli_error(
+        "interactive_invalid_selection: invalid dependency number {token}",
+      )
+    }
+    let index = parsed - 1
+    if !result.contains(index) {
+      result.push(index)
+    }
+  }
+  result
+}
+
+///|
+fn interactive_target(
+  change : @taze.DependencyChange,
+  line : String,
+) -> String? raise {
+  let value = line.trim().to_owned()
+  let target = change.target.unwrap_or("")
+  if value == "" {
+    if target == "" {
+      cli_error(
+        "interactive_invalid_candidate: dependency has no recommended candidate",
+      )
+    }
+    return Some(target)
+  }
+  if value == "q" || value == "Q" {
+    return None
+  }
+  let parsed = @string.parse_int(value) catch { _ => 0 }
+  if parsed >= 1 && parsed <= change.candidates.length() {
+    return Some(change.candidates[parsed - 1])
+  }
+  if change.candidates.contains(value) {
+    return Some(value)
+  }
+  if value == target {
+    return Some(value)
+  }
+  cli_error("interactive_invalid_candidate: invalid candidate \{value}")
+  None
+}
+
+///|
+/// Drive the small line-oriented TUI.  All writes remain behind the final
+/// confirmation and the returned selection is still validated by `apply`.
+async fn interactive_selection(
+  plan : @taze.CheckPlan,
+  emit~ : (String) -> Unit,
+) -> @taze.Selection? {
+  let changes = plan
+    .changes()
+    .filter(change => {
+      change.status is UpdateAvailable && change.target is Some(_)
+    })
+  if changes.is_empty() {
+    emit("No updates available")
+    return None
+  }
+  emit("Interactive mode: available updates")
+  for index, change in changes {
+    let target = change.target.unwrap_or("?")
+    emit(
+      "\{index + 1}) \{change.dependency.name} \{change.dependency.version} -> \{target}",
+    )
+    if !change.candidates.is_empty() {
+      emit("   candidates: \{change.candidates.join(", ")}")
+    }
+  }
+  emit("Select dependencies (numbers separated by comma, a=all, q=cancel):")
+  let selected_line = match interactive_read_line() {
+    Some(value) => value
+    None => {
+      emit("cancelled")
+      return None
+    }
+  }
+  let trimmed = selected_line.trim().to_owned()
+  if trimmed == "q" || trimmed == "Q" {
+    emit("cancelled")
+    return None
+  }
+  let selected_indices = interactive_indices(selected_line, changes.length())
+  let items : Array[(String, String, String)] = []
+  for index in selected_indices {
+    let change = changes[index]
+    let mut target = change.target.unwrap_or("")
+    if change.candidates.length() > 1 {
+      emit(
+        "Candidate for \{change.dependency.name} (number, version, or Enter for \{target}):",
+      )
+      let candidate_line = match interactive_read_line() {
+        Some(value) => value
+        None => {
+          emit("cancelled")
+          return None
+        }
+      }
+      match interactive_target(change, candidate_line) {
+        Some(value) => target = value
+        None => {
+          emit("cancelled")
+          return None
+        }
+      }
+    }
+    items.push((change.dependency.manifest, change.dependency.name, target))
+  }
+  if items.is_empty() {
+    emit("cancelled")
+    return None
+  }
+  emit("Apply \{items.length()} selected update(s)? [y/N]")
+  let confirmation = match interactive_read_line() {
+    Some(value) => value.trim().to_owned()
+    None => ""
+  }
+  if confirmation == "y" ||
+    confirmation == "Y" ||
+    confirmation == "yes" ||
+    confirmation == "YES" {
+    Some(plan.selection(items))
+  } else {
+    emit("cancelled")
+    None
   }
 }
 
@@ -742,9 +906,15 @@ async fn fetch_version_with_retries_attempt(
       if !retryable_cli_registry_error(error) || attempt >= retries {
         raise error
       }
-      let mut delay = delay_ms
-      for _ in 0..<attempt {
-        delay = delay * 2
+      let delay = match retry_after_ms(error) {
+        Some(value) if value >= 0 => value
+        _ => {
+          let mut computed = delay_ms
+          for _ in 0..<attempt {
+            computed = computed * 2
+          }
+          computed
+        }
       }
       if delay > 0 {
         @async.sleep(delay) catch {
@@ -820,6 +990,7 @@ async fn run_cli(
   cache_path? : String? = None,
   retry_delay_ms? : Int = 0,
   fetch_version? : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError = no_version_timestamp,
+  interactive_tty? : Bool? = None,
 ) -> Int {
   run_cli_inner(
     args,
@@ -830,6 +1001,7 @@ async fn run_cli(
     cache_path,
     retry_delay_ms,
     fetch_version,
+    interactive_tty,
   ) catch {
     CliError(message) => {
       if args.any(item => item == "--json") {
@@ -870,6 +1042,7 @@ async fn run_cli_inner(
   cache_path : String?,
   retry_delay_ms : Int,
   fetch_version : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError,
+  interactive_tty : Bool?,
 ) -> Int {
   if args.length() == 2 && (args[1] == "--help" || args[1] == "-h") {
     emit(usage())
@@ -883,6 +1056,7 @@ async fn run_cli_inner(
   let mut cwd = @env.current_dir().unwrap_or(".")
   let mut show_all = false
   let mut write = false
+  let mut interactive = false
   let mut json_output = false
   let mut silent = false
   let mut verify = false
@@ -930,6 +1104,8 @@ async fn run_cli_inner(
       }
     } else if arg == "-w" || arg == "--write" {
       write = true
+    } else if arg == "-I" || arg == "--interactive" {
+      interactive = true
     } else if arg == "-r" || arg == "--recursive" {
       recursive = true
       recursive_seen = true
@@ -1004,8 +1180,6 @@ async fn run_cli_inner(
         cli_error("invalid retry count: \{args[index]}")
       }
       retry_seen = true
-    } else if arg == "-I" || arg == "--interactive" {
-      cli_error("unsupported option in P1b: \{arg}")
     } else if arg == "-C" || arg == "--cwd" {
       if index + 1 >= args.length() {
         cli_error("missing value for \{arg}")
@@ -1026,6 +1200,16 @@ async fn run_cli_inner(
       cli_error("unexpected argument: \{arg}")
     }
     index += 1
+  }
+  // Machine-readable output must never block on a terminal prompt.
+  if json_output {
+    interactive = false
+  }
+  if interactive {
+    match interactive_tty {
+      Some(true) => ()
+      _ => cli_error("interactive_requires_tty: --interactive requires a TTY")
+    }
   }
   cwd = @fs.realpath(cwd) catch { _ => cwd }
   let manifest_path = match find_manifest(cwd) {
@@ -1443,8 +1627,21 @@ async fn run_cli_inner(
     }
     cli_error("check failed")
   }
+  let mut interactive_selection_result : @taze.Selection? = None
+  if interactive {
+    match interactive_selection(plan, emit~) {
+      Some(selection) => {
+        interactive_selection_result = Some(selection)
+        write = true
+      }
+      None => return 0
+    }
+  }
   if write {
-    let report = @taze.apply(plan, plan.recommended_selection())
+    let selection = interactive_selection_result.unwrap_or(
+      plan.recommended_selection(),
+    )
+    let report = @taze.apply(plan, selection)
     let verification : Array[VerificationResult] = []
     if verify && report.status() == Succeeded && report.written_files() > 0 {
       let verify_emit : (String) -> Unit = if json_output {
@@ -1580,6 +1777,7 @@ async fn main {
     cache_path~,
     retry_delay_ms=1000,
     fetch_version=fetch_mooncakes_version_cli,
+    interactive_tty=Some(interactive_terminal_available()),
   )
   if code != 0 {
     terminate_process(code)
