@@ -58,3 +58,22 @@ MOONBIT_FFI_EXPORT void moon_taze_interactive_stop(void) {
 #endif
   moon_taze_raw_active = 0;
 }
+
+MOONBIT_FFI_EXPORT uint32_t moon_taze_get_console_output_cp(void) {
+#ifdef _WIN32
+  return (uint32_t)GetConsoleOutputCP();
+#else
+  return 0;
+#endif
+}
+
+MOONBIT_FFI_EXPORT void moon_taze_set_console_output_cp(uint32_t cp) {
+#ifdef _WIN32
+  if (cp != 0) {
+    SetConsoleOutputCP((UINT)cp);
+    SetConsoleCP((UINT)cp);
+  }
+#else
+  (void)cp;
+#endif
+}

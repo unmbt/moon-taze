@@ -36,6 +36,14 @@ extern "C" fn moon_taze_interactive_stop() = "moon_taze_interactive_stop"
 
 ///|
 #cfg(target="native")
+extern "C" fn moon_taze_get_console_output_cp() -> UInt = "moon_taze_get_console_output_cp"
+
+///|
+#cfg(target="native")
+extern "C" fn moon_taze_set_console_output_cp(cp : UInt) = "moon_taze_set_console_output_cp"
+
+///|
+#cfg(target="native")
 fn interactive_terminal_available() -> Bool {
   moon_taze_stdin_isatty()
 }
@@ -53,6 +61,14 @@ fn interactive_start_raw() -> Unit raise {
 ///|
 fn interactive_stop_raw() -> Unit {
   moon_taze_interactive_stop()
+}
+
+///|
+#cfg(target="native")
+fn restore_console_output_cp(cp : UInt) -> Unit {
+  if cp != 0U {
+    moon_taze_set_console_output_cp(cp)
+  }
 }
 
 ///|
@@ -374,6 +390,30 @@ fn format_time_diff(current : Int64?, target : Int64?) -> String {
 }
 
 ///|
+/// Format a release timestamp the same way taze presents version ages in its
+/// interactive table. The registry stores milliseconds since the Unix epoch.
+fn format_release_age(value : Int64?) -> String {
+  match value {
+    None => "unknown"
+    Some(published) => {
+      let elapsed = @async.now() - published
+      if elapsed < 3600000L {
+        "<1h"
+      } else if elapsed < 360000000L {
+        "~\{((elapsed + 1800000L) / 3600000L)}h"
+      } else if elapsed < 2592000000L {
+        "~\{((elapsed + 43200000L) / 86400000L)}d"
+      } else if elapsed < 31536000000L {
+        "~\{((elapsed + 1296000000L) / 2592000000L)}mo"
+      } else {
+        let years = (elapsed.to_double() / 31536000000.0).to_string()
+        "~\{years}y"
+      }
+    }
+  }
+}
+
+///|
 async fn interactive_key() -> String? {
   let first = @stdio.stdin.read_exactly(1) catch { _ => return None }
   if first[0] == 0x1b {
@@ -435,11 +475,18 @@ fn interactive_change_line(
   target : String,
   selected : Bool,
   checked : Bool,
+  published_at : Map[String, Int64],
 ) -> String {
   let pointer = if selected { "❯" } else { " " }
   let mark = if checked { "◉" } else { "◌" }
   let suffix = if checked { "" } else { " (skipped)" }
-  "\{pointer} \{mark} \{change.dependency.name}  \{change.dependency.version} → \{target}\{suffix}"
+  let current_age = format_release_age(
+    published_at.get(change.dependency.name + "@" + change.dependency.version),
+  )
+  let target_age = format_release_age(
+    published_at.get(change.dependency.name + "@" + target),
+  )
+  "\{pointer} \{mark} \{change.dependency.name}  \{current_age} \{change.dependency.version} → \{target} \{target_age}\{suffix}"
 }
 
 ///|
@@ -448,6 +495,7 @@ async fn interactive_render_list(
   targets : Array[String],
   checked : Array[Bool],
   selected : Int,
+  published_at : Map[String, Int64],
 ) -> Unit {
   let lines : Array[String] = [
     "┃ ↑↓ select  space toggle  → change version", "┃ enter confirm  esc cancel  a select/unselect all",
@@ -460,6 +508,7 @@ async fn interactive_render_list(
         targets[index],
         index == selected,
         checked[index],
+        published_at,
       ),
     )
   }
@@ -471,15 +520,24 @@ async fn interactive_render_versions(
   change : @taze.DependencyChange,
   versions : Array[String],
   selected : Int,
+  published_at : Map[String, Int64],
 ) -> Unit {
   let lines : Array[String] = [
     "┃ Select a version for \{change.dependency.name} (current \{change.dependency.version})",
     "┃ ↑↓ select  enter confirm  esc cancel",
     "",
   ]
+  let current_age = format_release_age(
+    published_at.get(change.dependency.name + "@" + change.dependency.version),
+  )
   for index, version in versions {
     let pointer = if index == selected { "❯" } else { " " }
-    lines.push("\{pointer} \{version}")
+    let age = format_release_age(
+      published_at.get(change.dependency.name + "@" + version),
+    )
+    lines.push(
+      "\{pointer} \{current_age} \{change.dependency.version} → \{version} \{age}",
+    )
   }
   interactive_screen(lines.join("\n") + "\n")
 }
@@ -489,10 +547,11 @@ async fn interactive_version_loop(
   change : @taze.DependencyChange,
   versions : Array[String],
   selected : Int,
+  published_at : Map[String, Int64],
 ) -> Int? {
   let mut index = selected
   for ;; {
-    interactive_render_versions(change, versions, index)
+    interactive_render_versions(change, versions, index, published_at)
     match interactive_key() {
       None => return None
       Some("escape") | Some("left") => return None
@@ -511,10 +570,11 @@ async fn interactive_list_loop(
   targets : Array[String],
   checked : Array[Bool],
   selected : Int,
+  published_at : Map[String, Int64],
 ) -> @taze.Selection? {
   let mut index = selected
   for ;; {
-    interactive_render_list(changes, targets, checked, index)
+    interactive_render_list(changes, targets, checked, index, published_at)
     match interactive_key() {
       None | Some("escape") => {
         interactive_screen("\u001b[?25h")
@@ -542,7 +602,7 @@ async fn interactive_list_loop(
           }
         }
         if !versions.is_empty() {
-          match interactive_version_loop(change, versions, 0) {
+          match interactive_version_loop(change, versions, 0, published_at) {
             Some(version_index) => {
               targets[index] = versions[version_index]
               checked[index] = true
@@ -578,6 +638,7 @@ async fn interactive_list_loop(
 async fn interactive_selection(
   plan : @taze.CheckPlan,
   emit~ : (String) -> Unit,
+  published_at : Map[String, Int64],
 ) -> @taze.Selection? {
   let changes = plan
     .changes()
@@ -595,7 +656,7 @@ async fn interactive_selection(
   })
   let checked = Array::make(changes.length(), true)
   interactive_screen("\u001b[?25l")
-  interactive_list_loop(plan, changes, targets, checked, 0)
+  interactive_list_loop(plan, changes, targets, checked, 0, published_at)
 }
 
 ///|
@@ -1555,7 +1616,8 @@ async fn run_cli_inner(
       }
     }
   }
-  let need_release_times = timediff ||
+  let need_release_times = interactive ||
+    timediff ||
     sort_mode == "time-asc" ||
     sort_mode == "time-desc" ||
     maturity_days > 0 ||
@@ -1743,7 +1805,7 @@ async fn run_cli_inner(
   }
   let mut interactive_selection_result : @taze.Selection? = None
   if interactive {
-    match interactive_selection(plan, emit~) {
+    match interactive_selection(plan, emit~, detail_times) {
       Some(selection) => {
         interactive_selection_result = Some(selection)
         write = true
@@ -1878,6 +1940,11 @@ async fn run_cli_inner(
 
 ///|
 async fn main {
+  let old_cp = moon_taze_get_console_output_cp()
+  if old_cp != 0U {
+    moon_taze_set_console_output_cp(65001U)
+  }
+  defer restore_console_output_cp(old_cp)
   let cache : Map[String, @taze.ModuleMetadata] = Map([])
   let cache_times : Map[String, UInt64] = Map([])
   let cache_path = persistent_cache_path()
