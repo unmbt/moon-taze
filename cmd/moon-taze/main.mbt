@@ -406,8 +406,8 @@ fn format_release_age(value : Int64?) -> String {
       } else if elapsed < 31536000000L {
         "~\{((elapsed + 1296000000L) / 2592000000L)}mo"
       } else {
-        let years = (elapsed.to_double() / 31536000000.0).to_string()
-        "~\{years}y"
+        let tenths = (elapsed * 10L + 1576800000L) / 31536000000L
+        "~\{tenths / 10}.\{tenths % 10}y"
       }
     }
   }
