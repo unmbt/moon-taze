@@ -45,7 +45,7 @@ fn interactive_start_raw() -> Unit raise {
   let code = moon_taze_interactive_start()
   if code != 0 {
     cli_error(
-      "interactive_terminal: unable to enter raw input mode (native error {code})",
+      "interactive_terminal: unable to enter raw input mode (native error \{code})",
     )
   }
 }
@@ -903,14 +903,14 @@ fn retry_after_ms(error : @taze.RegistryError) -> Int? {
 async fn verify_directory(path : String, emit~ : (String) -> Unit) -> Bool {
   let (code, _, _) = @process.collect_output("moon", ["check"], cwd=path) catch {
     error => {
-      emit("error[moon_unavailable]: {error}")
+      emit("error[moon_unavailable]: \{error}")
       return false
     }
   }
   if code == 0 {
     true
   } else {
-    emit("error[verification_failed]: moon check exited {code} in {path}")
+    emit("error[verification_failed]: moon check exited \{code} in \{path}")
     false
   }
 }
@@ -1156,7 +1156,7 @@ async fn run_cli_inner(
     return 0
   }
   if args.length() == 2 && args[1] == "--version" {
-    emit("moon-taze {app_version()}")
+    emit("moon-taze \{app_version()}")
     return 0
   }
   let mut mode = @taze.UpdateMode::Default
@@ -1234,7 +1234,7 @@ async fn run_cli_inner(
         | "name-desc"
         | "time-asc"
         | "time-desc" => sort_mode = args[index]
-        _ => cli_error("invalid sort value: {args[index]}")
+        _ => cli_error("invalid sort value: \{args[index]}")
       }
     } else if arg == "--verify" {
       verify = true
@@ -1370,7 +1370,7 @@ async fn run_cli_inner(
         if !mode_seen {
           match parse_mode(value) {
             Some(parsed) => mode = parsed
-            None => cli_error("invalid_config: unknown mode {value}")
+            None => cli_error("invalid_config: unknown mode \{value}")
           }
         }
       None => ()
@@ -1681,7 +1681,7 @@ async fn run_cli_inner(
     }
     if group_output && grouped_manifest != Some(change.dependency.manifest) {
       grouped_manifest = Some(change.dependency.manifest)
-      emit("[{change.dependency.manifest}]")
+      emit("[\{change.dependency.manifest}]")
     }
     match change.status {
       UpdateAvailable => {
