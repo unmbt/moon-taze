@@ -34,7 +34,7 @@ moon run --target native cmd/main -- patch -C "path/to/project" --write
 
 根包提供 `Policy`、纯 `resolve`、`Callbacks`、`Selection`、`ApplyReport` 和 `apply(plan, selection, callbacks?)`。`plan.recommended_selection()` 选择全部推荐更新；`plan.selection([(manifest, dependency, target)])` 选择具体依赖，空数组表示不选择。`Selection::items()` 返回副本，路径使用该计划结果中的 `dependency.manifest`。check 回调按 `after_discovery`、`dependency_resolved` 顺序执行；apply 回调按 `before_apply`、`file_applied`、`after_run` 执行。回调返回空字符串表示接受，返回非空消息会生成 `callback_failed` 或 `callback_denied` 诊断，并保留已发生的写入报告。
 
-P1a 调用方需将 `plan.changes`、`plan.diagnostics`、`plan.has_errors` 改为 `plan.changes()`、`plan.diagnostics()`、`plan.has_errors()`。数组访问器返回副本；计划保存私有源码快照，选择绑定其所属计划，不能用 JSON 重放。`check_manifest` 会重新解析源码，因此无法通过修改 `Manifest.dependencies` 丢弃解析错误。完整可替换 Services 端口和 TUI 仍留待后续阶段；当前正式回调契约不暴露内部写入类型。
+P1a 调用方需将 `plan.changes`、`plan.diagnostics`、`plan.has_errors` 改为 `plan.changes()`、`plan.diagnostics()`、`plan.has_errors()`。数组访问器返回副本；计划保存私有源码快照，选择绑定其所属计划，不能用 JSON 重放。`check_manifest` 会重新解析源码，因此无法通过修改 `Manifest.dependencies` 丢弃解析错误。完整可替换 Services 端口和高级终端适配仍留待后续阶段；当前正式回调契约不暴露内部写入类型。
 
 `CheckPlan` 不再直接派生 `Eq`/`Debug`；需要比较或调试时使用访问器返回的公开结果，避免暴露私有源码快照。
 

@@ -111,7 +111,7 @@ declare pub async fn apply(
 
 `check` 返回收集了逐项错误的计划；参数、全局配置及无法开始检查的环境错误通过错误通道返回。`resolve` 是无 IO 的纯函数。`apply` 拒绝含 error 的计划，报告已发生的部分写入后不得仅抛出丢失上下文的异常。`CheckPlan` 提供只读访问器和从合格候选构造 `Selection` 的方法，不能通过修改数组绕过验证。此阶段不提供计划文件的保存/重放协议，JSON 报告不是可执行计划。
 
-P3a 已先交付不暴露内部写入器的根包子集：`Policy` 与 `resolve` 已公开；现有 `check_manifest*`/`check_manifests*` 接受可选 `Callbacks`；`apply` 接受同一回调集合；`Selection::items()` 返回副本。回调函数返回空字符串表示接受，非空消息分别形成 `callback_failed` 或 `callback_denied` 诊断。完整 `Services` 注入入口、验证参数和终端适配仍按 T-10/T-12 后续切片实施，不能将当前 Native writer 误称为可替换公共端口。
+P3a 已先交付不暴露内部写入器的根包子集：`Policy` 与 `resolve` 已公开；现有 `check_manifest*`/`check_manifests*` 接受可选 `Callbacks`；`apply` 接受同一回调集合；`Selection::items()` 返回副本。回调函数返回空字符串表示接受，非空消息分别形成 `callback_failed` 或 `callback_denied` 诊断。P3b CLI 已提供行式 TTY 选择和确认；完整 `Services` 注入入口、验证参数和高级终端适配仍按后续切片实施，不能将当前 Native writer 误称为可替换公共端口。
 
 | 可注入接口 | 责任 |
 | --- | --- |
