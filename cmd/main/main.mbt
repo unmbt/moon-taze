@@ -3,7 +3,7 @@ fn usage() -> String {
   let text =
     #|moon-taze [default|major|minor|patch|latest|stable|newest|next] [options]
     #|
-    #|Options: -C/--cwd, -w/--write, -a/--all, -r/--recursive, --json, --silent, --group/--no-group, --sort, --maturity-period, --maturity-period-exclude, --verify, --fail-on-outdated, --retry, --no-retry, -f/--force, --no-force, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, --version.
+    #|Options: -C/--cwd, -w/--write, -a/--all, -r/--recursive, --json, --silent, --group/--no-group, --sort, --timediff/--no-timediff, --maturity-period, --maturity-period-exclude, --verify, --fail-on-outdated, --retry, --no-retry, -f/--force, --no-force, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, --version.
     #|Default is read-only. --write applies all recommended updates to one moon.mod.
     #|Workspace members, recursive checks, JSON and non-interactive verify are supported.
   text
@@ -205,23 +205,83 @@ fn diff_rank(value : @taze.DiffKind?) -> Int {
 fn sort_changes(
   changes : Array[@taze.DependencyChange],
   sort_mode : String,
+  published_at? : Map[String, Int64] = Map([]),
 ) -> Array[@taze.DependencyChange] {
   let result = changes.copy()
   result.sort_by((left, right) => {
+    let status_rank = fn(change : @taze.DependencyChange) -> Int {
+      match change.status {
+        UpdateAvailable => 0
+        UpToDate => 1
+        NoCandidate => 2
+        Skipped => 3
+        Error => 4
+      }
+    }
+    let time_key = fn(change : @taze.DependencyChange) -> Int64? {
+      let version = match sort_mode {
+        "time-asc" | "time-desc" =>
+          change.target.unwrap_or(change.dependency.version)
+        _ => return None
+      }
+      published_at.get(change.dependency.name + "@" + version)
+    }
+    let compare_time = fn(
+      left_time : Int64?,
+      right_time : Int64?,
+      descending : Bool,
+    ) -> Int {
+      match (left_time, right_time) {
+        (None, None) => 0
+        (None, Some(_)) => 1
+        (Some(_), None) => -1
+        (Some(left_value), Some(right_value)) =>
+          if descending {
+            right_value.compare(left_value)
+          } else {
+            left_value.compare(right_value)
+          }
+      }
+    }
     let comparison = match sort_mode {
       "name-asc" => left.dependency.name.compare(right.dependency.name)
       "name-desc" => right.dependency.name.compare(left.dependency.name)
       "diff-asc" => diff_rank(left.diff).compare(diff_rank(right.diff))
       "diff-desc" => diff_rank(right.diff).compare(diff_rank(left.diff))
-      // P2 overview responses do not include publication timestamps yet.
-      "time-asc" => left.dependency.name.compare(right.dependency.name)
-      "time-desc" => right.dependency.name.compare(left.dependency.name)
+      "time-asc" => {
+        let status = status_rank(left).compare(status_rank(right))
+        if status == 0 {
+          compare_time(time_key(left), time_key(right), false)
+        } else {
+          status
+        }
+      }
+      "time-desc" => {
+        let status = status_rank(left).compare(status_rank(right))
+        if status == 0 {
+          compare_time(time_key(left), time_key(right), true)
+        } else {
+          status
+        }
+      }
       _ => 0
     }
-    if comparison == 0 {
-      left.dependency.name.compare(right.dependency.name)
-    } else {
+    if comparison != 0 {
       comparison
+    } else {
+      let by_name = left.dependency.name.compare(right.dependency.name)
+      if by_name != 0 {
+        by_name
+      } else {
+        let by_manifest = left.dependency.manifest.compare(
+          right.dependency.manifest,
+        )
+        if by_manifest != 0 {
+          by_manifest
+        } else {
+          left.dependency.version.compare(right.dependency.version)
+        }
+      }
     }
   })
   result
@@ -251,6 +311,27 @@ fn json_optional(value : String?) -> Json {
 }
 
 ///|
+fn format_time_diff(current : Int64?, target : Int64?) -> String {
+  match (current, target) {
+    (Some(current), Some(target)) => {
+      let seconds = (target - current) / 1000
+      let sign = if seconds < 0 { "-" } else { "+" }
+      let magnitude = if seconds < 0 { -seconds } else { seconds }
+      if magnitude >= 86400 {
+        "\{sign}\{magnitude / 86400}d"
+      } else if magnitude >= 3600 {
+        "\{sign}\{magnitude / 3600}h"
+      } else if magnitude >= 60 {
+        "\{sign}\{magnitude / 60}m"
+      } else {
+        "\{sign}\{magnitude}s"
+      }
+    }
+    _ => "unknown"
+  }
+}
+
+///|
 fn json_diagnostic(value : @taze.Diagnostic) -> Json {
   let object : Map[String, Json] = Map([])
   object["severity"] = json_text(
@@ -275,7 +356,10 @@ fn json_diagnostic(value : @taze.Diagnostic) -> Json {
 }
 
 ///|
-fn json_change(value : @taze.DependencyChange) -> Json {
+fn json_change(
+  value : @taze.DependencyChange,
+  published_at? : Map[String, Int64] = Map([]),
+) -> Json {
   let object : Map[String, Json] = Map([])
   object["name"] = json_text(value.dependency.name)
   object["current"] = json_text(value.dependency.version)
@@ -300,9 +384,26 @@ fn json_change(value : @taze.DependencyChange) -> Json {
   object["reason"] = json_optional(value.reason)
   object["selected"] = Json::boolean(false)
   object["applied"] = Json::boolean(false)
-  object["currentPublishedAt"] = Json::null()
-  object["targetPublishedAt"] = Json::null()
-  object["timeDiffSeconds"] = Json::null()
+  let current_time = published_at.get(
+    value.dependency.name + "@" + value.dependency.version,
+  )
+  let target_time = match value.target {
+    Some(target) => published_at.get(value.dependency.name + "@" + target)
+    None => None
+  }
+  object["currentPublishedAt"] = match current_time {
+    Some(value) => Json::number(value.to_double())
+    None => Json::null()
+  }
+  object["targetPublishedAt"] = match target_time {
+    Some(value) => Json::number(value.to_double())
+    None => Json::null()
+  }
+  object["timeDiffSeconds"] = match (current_time, target_time) {
+    (Some(current), Some(target)) =>
+      Json::number((target - current).to_double() / 1000.0)
+    _ => Json::null()
+  }
   Json::object(object)
 }
 
@@ -340,6 +441,8 @@ fn render_json(
   report : @taze.ApplyReport?,
   verification : Array[VerificationResult],
   fail_on_outdated : Bool,
+  published_at? : Map[String, Int64] = Map([]),
+  extra_diagnostics? : Array[@taze.Diagnostic] = [],
 ) -> String {
   let changes = plan.changes()
   let project_paths : Array[String] = []
@@ -353,7 +456,7 @@ fn render_json(
   for path in project_paths {
     let dependencies = changes
       .filter(change => change.dependency.manifest == path)
-      .map(json_change)
+      .map(change => json_change(change, published_at~))
     let object : Map[String, Json] = Map([])
     object["manifest"] = json_text(path)
     let mut module_name = ""
@@ -395,6 +498,7 @@ fn render_json(
     },
   )
   let diagnostic_values = plan.diagnostics()
+  diagnostic_values.append(extra_diagnostics)
   match report {
     Some(value) => diagnostic_values.append(value.diagnostics())
     None => ()
@@ -589,6 +693,124 @@ async fn fetch_with_retries_attempt(
 }
 
 ///|
+async fn fetch_mooncakes_version_cli(
+  module : String,
+  version : String,
+) -> @taze.VersionMetadata? raise @taze.RegistryError {
+  Some(
+    @taze.query_mooncakes_version(root="https://mooncakes.io", module, version),
+  )
+}
+
+///|
+async fn no_version_timestamp(
+  _module : String,
+  _version : String,
+) -> @taze.VersionMetadata? raise @taze.RegistryError {
+  None
+}
+
+///|
+async fn fetch_version_with_retries(
+  fetch_version~ : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError,
+  module : String,
+  version : String,
+  retries : Int,
+  delay_ms : Int,
+) -> @taze.VersionMetadata? raise @taze.RegistryError {
+  fetch_version_with_retries_attempt(
+    fetch_version~,
+    module,
+    version,
+    retries,
+    delay_ms,
+    0,
+  )
+}
+
+///|
+async fn fetch_version_with_retries_attempt(
+  fetch_version~ : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError,
+  module : String,
+  version : String,
+  retries : Int,
+  delay_ms : Int,
+  attempt : Int,
+) -> @taze.VersionMetadata? raise @taze.RegistryError {
+  fetch_version(module, version) catch {
+    error => {
+      if !retryable_cli_registry_error(error) || attempt >= retries {
+        raise error
+      }
+      let mut delay = delay_ms
+      for _ in 0..<attempt {
+        delay = delay * 2
+      }
+      if delay > 0 {
+        @async.sleep(delay) catch {
+          _ => ()
+        }
+      }
+      fetch_version_with_retries_attempt(
+        fetch_version~,
+        module,
+        version,
+        retries,
+        delay_ms,
+        attempt + 1,
+      )
+    }
+  }
+}
+
+///|
+/// Fill the overview with detail timestamps only when a caller requested
+/// time-sensitive behavior. Detail responses are shared across all consumers
+/// in one CLI invocation, including missing timestamps.
+async fn enrich_release_times(
+  metadata : @taze.ModuleMetadata,
+  fetch_version : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError,
+  detail_times : Map[String, Int64],
+  detail_missing : Map[String, Bool],
+  retries : Int,
+  delay_ms : Int,
+) -> @taze.ModuleMetadata raise @taze.RegistryError {
+  let versions = metadata.versions.copy()
+  for index in 0..<versions.length() {
+    let item = versions[index]
+    let key = metadata.module + "@" + item.version
+    match item.published_at {
+      Some(value) => detail_times[key] = value
+      None if detail_times.contains(key) || detail_missing.contains(key) => ()
+      None => {
+        let timestamp = fetch_version_with_retries(
+          fetch_version~,
+          metadata.module,
+          item.version,
+          retries,
+          delay_ms,
+        )
+        match timestamp {
+          Some(value) => {
+            match value.published_at {
+              Some(published_at) => detail_times[key] = published_at
+              None => detail_missing[key] = true
+            }
+            versions[index] = value
+          }
+          None => detail_missing[key] = true
+        }
+      }
+    }
+  }
+  @taze.ModuleMetadata::ModuleMetadata(
+    metadata.module,
+    metadata.latest,
+    versions,
+  )
+}
+
+///|
 async fn run_cli(
   args : Array[String],
   fetch~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
@@ -597,6 +819,7 @@ async fn run_cli(
   cache_times? : Map[String, UInt64] = Map([]),
   cache_path? : String? = None,
   retry_delay_ms? : Int = 0,
+  fetch_version? : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError = no_version_timestamp,
 ) -> Int {
   run_cli_inner(
     args,
@@ -606,6 +829,7 @@ async fn run_cli(
     cache_times,
     cache_path,
     retry_delay_ms,
+    fetch_version,
   ) catch {
     CliError(message) => {
       if args.any(item => item == "--json") {
@@ -635,6 +859,8 @@ async fn run_cli(
 }
 
 ///|
+
+///|
 async fn run_cli_inner(
   args : Array[String],
   fetch~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
@@ -643,13 +869,14 @@ async fn run_cli_inner(
   cache_times : Map[String, UInt64],
   cache_path : String?,
   retry_delay_ms : Int,
+  fetch_version : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError,
 ) -> Int {
   if args.length() == 2 && (args[1] == "--help" || args[1] == "-h") {
     emit(usage())
     return 0
   }
   if args.length() == 2 && args[1] == "--version" {
-    emit("moon-taze 0.1.0-p2")
+    emit("moon-taze 0.1.0-p3")
     return 0
   }
   let mut mode = @taze.UpdateMode::Default
@@ -667,6 +894,8 @@ async fn run_cli_inner(
   let mut fail_on_outdated_seen = false
   let mut maturity_days = 0
   let mut maturity_seen = false
+  let mut timediff = false
+  let mut timediff_seen = false
   let maturity_exclude : Array[String] = []
   let mut maturity_exclude_seen = false
   let mut recursive = false
@@ -739,7 +968,11 @@ async fn run_cli_inner(
       fail_on_outdated = false
       fail_on_outdated_seen = true
     } else if arg == "--timediff" {
-      cli_error("unsupported option in P3a: --timediff")
+      timediff = true
+      timediff_seen = true
+    } else if arg == "--no-timediff" {
+      timediff = false
+      timediff_seen = true
     } else if arg == "--maturity-period" {
       maturity_seen = true
       if index + 1 < args.length() && !args[index + 1].has_prefix("-") {
@@ -898,6 +1131,12 @@ async fn run_cli_inner(
         None => ()
       }
     }
+    if !timediff_seen {
+      match config.timediff {
+        Some(value) => timediff = value
+        None => ()
+      }
+    }
     if !maturity_seen {
       match config.maturityPeriod {
         Some(value) => {
@@ -1025,17 +1264,40 @@ async fn run_cli_inner(
       }
     }
   }
+  let need_release_times = timediff ||
+    sort_mode == "time-asc" ||
+    sort_mode == "time-desc" ||
+    maturity_days > 0 ||
+    mode == @taze.UpdateMode::Newest ||
+    mode == @taze.UpdateMode::Next
+  let detail_times : Map[String, Int64] = Map([])
+  let detail_missing : Map[String, Bool] = Map([])
   let effective_fetch : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError = name => {
     let registry_root = "https://mooncakes.io"
     let key = cache_key(registry_root, name)
     if !force {
       match cache.get(key) {
-        Some(value) => return value
+        Some(value) =>
+          return if need_release_times {
+            enrich_release_times(
+              value, fetch_version, detail_times, detail_missing, retry_count, retry_delay_ms,
+            )
+          } else {
+            value
+          }
         None =>
           // Read the old process-local key shape during the transition to
           // registry-scoped persistent cache entries.
           match cache.get(name) {
-            Some(value) => return value
+            Some(value) =>
+              return if need_release_times {
+                enrich_release_times(
+                  value, fetch_version, detail_times, detail_missing, retry_count,
+                  retry_delay_ms,
+                )
+              } else {
+                value
+              }
             None => ()
           }
       }
@@ -1046,12 +1308,19 @@ async fn run_cli_inner(
       retry_count,
       delay_ms=retry_delay_ms,
     )
-    cache[key] = value
+    let enriched = if need_release_times {
+      enrich_release_times(
+        value, fetch_version, detail_times, detail_missing, retry_count, retry_delay_ms,
+      )
+    } else {
+      value
+    }
+    cache[key] = enriched
     cache_times[key] = @env.now()
     save_persistent_cache(cache_path, cache, cache_times) catch {
       _ => ()
     }
-    value
+    enriched
   }
   let release_options = @taze.ReleaseOptions::ReleaseOptions(
     @env.now().reinterpret_as_int64(),
@@ -1077,7 +1346,43 @@ async fn run_cli_inner(
       emit("\{level}[\{diagnostic.code}]: \{diagnostic.message}")
     }
   }
-  let changes = sort_changes(plan.changes(), sort_mode)
+  let extra_diagnostics : Array[@taze.Diagnostic] = []
+  if timediff {
+    for change in plan.changes() {
+      match change.target {
+        Some(target) => {
+          let current_key = change.dependency.name +
+            "@" +
+            change.dependency.version
+          let target_key = change.dependency.name + "@" + target
+          if !detail_times.contains(current_key) ||
+            !detail_times.contains(target_key) {
+            extra_diagnostics.push(
+              @taze.warning_diagnostic(
+                "unknown_release_time",
+                "current or target release time is unavailable for timediff",
+                Some(change.dependency.manifest),
+                Some(change.dependency.name),
+                Some(change.dependency.span.line),
+                Some(change.dependency.span.column),
+              ),
+            )
+          }
+        }
+        None => ()
+      }
+    }
+  }
+  if !json_output && !silent {
+    for diagnostic in extra_diagnostics {
+      emit("warning[\{diagnostic.code}]: \{diagnostic.message}")
+    }
+  }
+  let changes = sort_changes(
+    plan.changes(),
+    sort_mode,
+    published_at=detail_times,
+  )
   let mut grouped_manifest : String? = None
   for change in changes {
     if json_output || silent {
@@ -1091,8 +1396,19 @@ async fn run_cli_inner(
       UpdateAvailable => {
         let target = change.target.unwrap_or("?")
         let mode_text = mode_name(change.mode)
+        let timediff_text = if timediff {
+          let current = detail_times.get(
+            change.dependency.name + "@" + change.dependency.version,
+          )
+          let target_time = detail_times.get(
+            change.dependency.name + "@" + target,
+          )
+          " timediff=\{format_time_diff(current, target_time)}"
+        } else {
+          ""
+        }
         emit(
-          "\{change.dependency.name} \{change.dependency.version} -> \{target} (\{mode_text})",
+          "\{change.dependency.name} \{change.dependency.version} -> \{target} (\{mode_text})\{timediff_text}",
         )
       }
       UpToDate =>
@@ -1112,7 +1428,17 @@ async fn run_cli_inner(
   }
   if plan.has_errors() {
     if json_output {
-      emit(render_json(plan, mode, None, [], fail_on_outdated))
+      emit(
+        render_json(
+          plan,
+          mode,
+          None,
+          [],
+          fail_on_outdated,
+          published_at=detail_times,
+          extra_diagnostics~,
+        ),
+      )
       return 2
     }
     cli_error("check failed")
@@ -1167,7 +1493,15 @@ async fn run_cli_inner(
     }
     if json_output {
       emit(
-        render_json(plan, mode, Some(report), verification, fail_on_outdated),
+        render_json(
+          plan,
+          mode,
+          Some(report),
+          verification,
+          fail_on_outdated,
+          published_at=detail_times,
+          extra_diagnostics~,
+        ),
       )
       if report.exit_code() != 0 || verification.any(item => !item.passed) {
         return 2
@@ -1211,7 +1545,17 @@ async fn run_cli_inner(
     return 0
   }
   if json_output {
-    emit(render_json(plan, mode, None, [], fail_on_outdated))
+    emit(
+      render_json(
+        plan,
+        mode,
+        None,
+        [],
+        fail_on_outdated,
+        published_at=detail_times,
+        extra_diagnostics~,
+      ),
+    )
   }
   if fail_on_outdated &&
     plan.changes().any(item => item.status is UpdateAvailable) {
@@ -1235,6 +1579,7 @@ async fn main {
     cache_times~,
     cache_path~,
     retry_delay_ms=1000,
+    fetch_version=fetch_mooncakes_version_cli,
   )
   if code != 0 {
     terminate_process(code)

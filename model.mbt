@@ -45,6 +45,20 @@ pub struct Diagnostic {
 } derive(Debug, Eq)
 
 ///|
+/// Construct a warning for integrations that enrich a check result with
+/// presentation-time information such as optional release timestamps.
+pub fn warning_diagnostic(
+  code : String,
+  message : String,
+  manifest : String?,
+  dependency : String?,
+  line : Int?,
+  column : Int?,
+) -> Diagnostic {
+  warning(code, message, manifest, dependency, line, column)
+}
+
+///|
 pub enum ChangeStatus {
   UpdateAvailable
   UpToDate

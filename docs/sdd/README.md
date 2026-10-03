@@ -1,10 +1,10 @@
 # moon-taze：规格驱动开发文档
 
-状态：P1a 只读闭环与 P1b 写回实现已核验；P2 的 T-06 工作区/递归/配置、T-07 版本化 TTL 缓存/有界重试与 Retry-After、T-08 JSON/CI 基础契约及文本排序/分组、T-12 非交互 verify 已接入。P3a 已接入固定时钟、发布时间选择、成熟期策略、纯 resolve、Selection 访问和 check/apply 生命周期回调。请求调度当前保持串行有界；在线详情时间、time sort、完整日志级别和平台验收仍待后续阶段。符号链接实机写入拒绝待权限环境复验。核验日期：2026-10-02。文档版本：0.3。证据见 [P1a](evidence-p1a.md)、[P1b](evidence-p1b.md)、[P2 首轮](evidence-p2.md)、[P3a](evidence-p3.md)。
+状态：P1a 只读闭环与 P1b 写回实现已核验；P2 的 T-06 工作区/递归/配置、T-07 版本化 TTL 缓存/有界重试与 Retry-After、T-08 JSON/CI 基础契约及文本排序/分组、T-12 非交互 verify 已接入。P3a 已接入固定时钟、发布时间选择、成熟期策略、Mooncakes 在线详情、timediff/time sort、纯 resolve、Selection 访问和 check/apply 生命周期回调。请求调度当前保持串行有界；TUI、完整日志级别和平台验收仍待后续阶段。符号链接实机写入拒绝待权限环境复验。核验日期：2026-10-03。文档版本：0.4。证据见 [P1a](evidence-p1a.md)、[P1b](evidence-p1b.md)、[P2 首轮](evidence-p2.md)、[P3a](evidence-p3.md)。
 
 本项目将 taze 的依赖检查与更新体验适配到 MoonBit：读取项目已有依赖，从 Mooncakes 查询版本，生成更新计划，由用户预览或选择后写回。这里的 SDD 指 **Specification-Driven Development（规格驱动开发）**；技术设计是其中一部分。
 
-已交付 P0/P1a 基础及 P1b 单模块显式写回：私有检查快照、绑定计划的选择、版本区间补丁、锁与权限保护、原子替换、取消及部分失败报告。P2 已补充工作区、递归、缓存、JSON/CI 基础和非交互 verify；P3a 已接入固定时钟、发布时间选择、成熟期过滤、newest/next 诊断、纯 resolve 和统一生命周期回调，TUI 仍按任务表待实施。
+已交付 P0/P1a 基础及 P1b 单模块显式写回：私有检查快照、绑定计划的选择、版本区间补丁、锁与权限保护、原子替换、取消及部分失败报告。P2 已补充工作区、递归、缓存、JSON/CI 基础和非交互 verify；P3a 已接入固定时钟、发布时间详情、成熟期过滤、newest/next 诊断、timediff/time sort、纯 resolve 和统一生命周期回调，TUI 仍按任务表待实施。
 
 ## 阅读顺序
 

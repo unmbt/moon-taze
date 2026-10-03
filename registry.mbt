@@ -56,6 +56,16 @@ struct RegistryVersion {
 } derive(FromJson, Debug)
 
 ///|
+/// A version detail response has the release timestamp in metadata.created_at.
+struct RegistryDetail {
+  module : String
+  version : String
+  yanked : Bool
+  yanked_reason : Json
+  metadata : Json?
+} derive(FromJson, Debug)
+
+///|
 fn optional_reason(value : Json) -> String? raise RegistryError {
   match value {
     Json::Null => None
@@ -71,6 +81,146 @@ fn optional_reason(value : Json) -> String? raise RegistryError {
 fn registry_url(root : String, module : String) -> String {
   let encoded = module.replace(old="/", new="%2F")
   root + "/api/v0/modules/" + encoded
+}
+
+///|
+fn registry_version_url(
+  root : String,
+  module : String,
+  version : String,
+) -> String {
+  registry_url(root, module) + "%40" + version.replace(old="+", new="%2B")
+}
+
+///|
+fn parse_rfc3339_ms(value : String) -> Int64? {
+  if value.length() < 20 ||
+    value[4] != '-' ||
+    value[7] != '-' ||
+    value[10] != 'T' ||
+    value[13] != ':' ||
+    value[16] != ':' {
+    return None
+  }
+  let parse = fn(raw : StringView) -> Int? {
+    if raw.is_empty() || !raw.to_owned().all(is_ascii_digit) {
+      return None
+    }
+    Some(@string.parse_int(raw.to_owned())) catch {
+      _ => None
+    }
+  }
+  let year = parse(value[:4])
+  let month = parse(value[5:7])
+  let day = parse(value[8:10])
+  let hour = parse(value[11:13])
+  let minute = parse(value[14:16])
+  let second = parse(value[17:19])
+  guard year is Some(year) &&
+    month is Some(month) &&
+    day is Some(day) &&
+    hour is Some(hour) &&
+    minute is Some(minute) &&
+    second is Some(second) else {
+    return None
+  }
+  if month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    year < 1 {
+    return None
+  }
+  let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+  let days_in_month = match month {
+    2 => if leap { 29 } else { 28 }
+    4 | 6 | 9 | 11 => 30
+    _ => 31
+  }
+  if day > days_in_month {
+    return None
+  }
+  let mut index = 19
+  let mut fraction_ms = 0
+  if index < value.length() && value[index] == '.' {
+    index += 1
+    let start = index
+    while index < value.length() && value[index] >= '0' && value[index] <= '9' {
+      index += 1
+    }
+    if index == start {
+      return None
+    }
+    let digits = value[start:index]
+    let mut factor = 100
+    for digit in digits {
+      if factor > 0 {
+        fraction_ms += (digit.to_int() - '0'.to_int()) * factor
+        factor = factor / 10
+      }
+    }
+  }
+  let mut offset_minutes = 0
+  if index < value.length() && value[index] == 'Z' {
+    index += 1
+  } else if index + 5 < value.length() &&
+    (value[index] == '+' || value[index] == '-') &&
+    value[index + 3] == ':' {
+    let offset_hour = parse(value[index + 1:index + 3])
+    let offset_minute = parse(value[index + 4:index + 6])
+    guard offset_hour is Some(offset_hour) &&
+      offset_minute is Some(offset_minute) else {
+      return None
+    }
+    if offset_hour > 23 || offset_minute > 59 {
+      return None
+    }
+    offset_minutes = offset_hour * 60 + offset_minute
+    if value[index] == '-' {
+      offset_minutes = -offset_minutes
+    }
+    index += 6
+  } else {
+    return None
+  }
+  if index != value.length() {
+    return None
+  }
+  let y = year - (if month <= 2 { 1 } else { 0 })
+  let era = y / 400
+  let yoe = y - era * 400
+  let month_prime = month + (if month > 2 { -3 } else { 9 })
+  let day_of_year = (153 * month_prime + 2) / 5 + day - 1
+  let day_of_era = yoe * 365 + yoe / 4 - yoe / 100 + day_of_year
+  let days = era * 146097 + day_of_era - 719468
+  Some(
+    Int64::from_int(days) * 86400000 +
+    Int64::from_int(
+      hour * 3600000 + minute * 60000 + second * 1000 + fraction_ms,
+    ) -
+    Int64::from_int(offset_minutes * 60000),
+  )
+}
+
+///|
+fn detail_created_at(value : Json?) -> String? raise RegistryError {
+  match value {
+    Some(Json::Object(object)) =>
+      match object.get("created_at") {
+        Some(Json::String(created_at)) => Some(created_at)
+        None | Some(Json::Null) => None
+        _ =>
+          raise RegistryError::InvalidMetadata(
+            "created_at must be a string or null",
+          )
+      }
+    None | Some(Json::Null) => None
+    _ =>
+      raise RegistryError::InvalidMetadata("metadata must be an object or null")
+  }
 }
 
 ///|
@@ -157,6 +307,79 @@ pub async fn query_mooncakes(
       raise RegistryError::InvalidMetadata("invalid metadata schema: \{err}")
   }
   metadata_from_overview(overview, module)
+}
+
+///|
+/// Query one Mooncakes version detail, including withdrawal status and UTC
+/// publication time in Unix milliseconds.
+/// A valid detail response may omit metadata.created_at; that is represented
+/// as None so callers can distinguish an unknown timestamp from transport or
+/// schema failures.
+pub async fn query_mooncakes_version(
+  root~ : String,
+  module : String,
+  version : String,
+) -> VersionMetadata raise RegistryError {
+  ignore(
+    parse_version(version) catch {
+      _ => raise RegistryError::InvalidMetadata("invalid requested version")
+    },
+  )
+  let url = registry_version_url(root, module, version)
+  let response_body = @async.with_timeout_opt(5000, () => @http.get(url)) catch {
+    @async.TimeoutError => raise RegistryError::RequestFailed("request_timeout")
+    err => raise RegistryError::RequestFailed(err.to_string())
+  }
+  let (response, body) = match response_body {
+    None => raise RegistryError::RequestFailed("request_timeout")
+    Some(value) => value
+  }
+  let text = body.text() catch {
+    err => raise RegistryError::RequestFailed(err.to_string())
+  }
+  if response.code < 200 || response.code >= 300 {
+    let retry_after = match response.headers.get("retry-after") {
+      Some(value) => retry_after_header(value)
+      None => ""
+    }
+    raise RegistryError::RequestFailed("HTTP \{response.code}\{retry_after}")
+  }
+  let json = @json.parse(text) catch {
+    _ => raise RegistryError::InvalidMetadata("invalid JSON")
+  }
+  metadata_from_detail(json, module, version)
+}
+
+///|
+fn metadata_from_detail(
+  json : Json,
+  module : String,
+  version : String,
+) -> VersionMetadata raise RegistryError {
+  let detail : RegistryDetail = @json.from_json(json) catch {
+    err =>
+      raise RegistryError::InvalidMetadata("invalid metadata schema: \{err}")
+  }
+  if detail.module != module {
+    raise RegistryError::InvalidMetadata("detail module mismatch")
+  }
+  if detail.version != version {
+    raise RegistryError::InvalidMetadata("detail version mismatch")
+  }
+  let published_at = match detail_created_at(detail.metadata) {
+    Some(value) =>
+      match parse_rfc3339_ms(value) {
+        Some(timestamp) => Some(timestamp)
+        None => raise RegistryError::InvalidMetadata("invalid created_at")
+      }
+    None => None
+  }
+  {
+    version,
+    yanked: detail.yanked,
+    yanked_reason: optional_reason(detail.yanked_reason),
+    published_at,
+  }
 }
 
 ///|

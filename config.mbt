@@ -11,6 +11,7 @@ pub struct Config {
   pub retry : Int?
   pub force : Bool?
   pub failOnOutdated : Bool?
+  pub timediff : Bool?
   pub maturityPeriod : Int?
   pub maturityPeriodExclude : Array[String]?
 } derive(FromJson, Debug, Eq)
@@ -131,7 +132,7 @@ pub async fn read_config(path : String) -> ConfigResult {
     Json::Object(object) => {
       let allowed = [
         "mode", "recursive", "all", "include", "exclude", "ignoreOtherWorkspaces",
-        "retry", "force", "failOnOutdated", "maturityPeriod", "maturityPeriodExclude",
+        "retry", "force", "failOnOutdated", "timediff", "maturityPeriod", "maturityPeriodExclude",
       ]
       for key in object.keys() {
         if !allowed.contains(key) {

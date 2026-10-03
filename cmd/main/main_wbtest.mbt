@@ -12,6 +12,115 @@ fn cli_fixture_fetch(
 }
 
 ///|
+async test "CLI timediff enriches detail timestamps once and emits JSON fields" {
+  let root = @fs.tmpdir(prefix="moon-taze-cli-timediff")
+  defer @fs.rmdir(root, recursive=true)
+  let path = root + "/moon.mod"
+  @fs.write_file(path, b"name = \"demo/app\"\nimport {\"demo/lib@1.0.0\"}")
+  let detail_calls : Array[String] = []
+  async fn fetch(
+    name : String,
+  ) -> @taze.ModuleMetadata raise @taze.RegistryError {
+    @taze.ModuleMetadata(name, Some("1.1.0"), [
+      @taze.VersionMetadata("1.0.0", false, None, None),
+      @taze.VersionMetadata("1.1.0", false, None, None),
+    ])
+  }
+  async fn detail(
+    name : String,
+    version : String,
+  ) -> @taze.VersionMetadata? raise @taze.RegistryError {
+    detail_calls.push(name + "@" + version)
+    if version == "1.0.0" {
+      Some(
+        @taze.VersionMetadata(version, false, None, Some(Int64::from_int(0))),
+      )
+    } else {
+      Some(
+        @taze.VersionMetadata(
+          version,
+          false,
+          None,
+          Some(Int64::from_int(86400000)),
+        ),
+      )
+    }
+  }
+  let text_output : Array[String] = []
+  assert_eq(
+    run_cli(
+      ["moon-taze", "-C", root, "--timediff"],
+      fetch~,
+      emit=line => text_output.push(line),
+      fetch_version=detail,
+    ),
+    0,
+  )
+  assert_true(text_output.any(line => line.contains("timediff=+1d")))
+  assert_eq(detail_calls, ["demo/lib@1.0.0", "demo/lib@1.1.0"])
+  detail_calls.clear()
+  let json_output : Array[String] = []
+  assert_eq(
+    run_cli(
+      ["moon-taze", "-C", root, "--timediff", "--json"],
+      fetch~,
+      emit=line => json_output.push(line),
+      fetch_version=detail,
+    ),
+    0,
+  )
+  assert_eq(json_output.length(), 1)
+  assert_true(json_output[0].contains("currentPublishedAt"))
+  assert_true(json_output[0].contains("timeDiffSeconds"))
+  assert_true(json_output[0].contains("\"currentPublishedAt\":0"))
+  assert_true(json_output[0].contains("\"timeDiffSeconds\":86400"))
+  assert_eq(detail_calls, ["demo/lib@1.0.0", "demo/lib@1.1.0"])
+}
+
+///|
+async test "CLI time sort uses target publication time and puts unknown last" {
+  let root = @fs.tmpdir(prefix="moon-taze-cli-timesort")
+  defer @fs.rmdir(root, recursive=true)
+  let path = root + "/moon.mod"
+  @fs.write_file(
+    path, b"name = \"demo/app\"\nimport {\"demo/a@1.0.0\", \"demo/b@1.0.0\"}",
+  )
+  async fn fetch(
+    name : String,
+  ) -> @taze.ModuleMetadata raise @taze.RegistryError {
+    @taze.ModuleMetadata(name, Some("1.1.0"), [
+      @taze.VersionMetadata("1.0.0", false, None, None),
+      @taze.VersionMetadata("1.1.0", false, None, None),
+    ])
+  }
+  async fn detail(
+    name : String,
+    version : String,
+  ) -> @taze.VersionMetadata? raise @taze.RegistryError {
+    if name == "demo/a" {
+      Some(
+        @taze.VersionMetadata(version, false, None, Some(Int64::from_int(20))),
+      )
+    } else {
+      Some(@taze.VersionMetadata(version, false, None, None))
+    }
+  }
+  let output : Array[String] = []
+  assert_eq(
+    run_cli(
+      ["moon-taze", "-C", root, "--sort", "time-asc"],
+      fetch~,
+      emit=line => output.push(line),
+      fetch_version=detail,
+    ),
+    0,
+  )
+  assert_true(output.length() >= 2)
+  assert_true(output[0].has_prefix("demo/a "))
+  assert_true(output[1].has_prefix("demo/b "))
+}
+
+///|
 async test "CLI preview write filtered update and repeat are offline and isolated" {
   let root = @fs.tmpdir(prefix="moon-taze-cli 空格 &")
   defer @fs.rmdir(root, recursive=true)
