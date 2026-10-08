@@ -1,4 +1,48 @@
 ///|
+test "release ages use hours days months and years" {
+  assert_eq(format_release_age(None, now=0L), "unknown")
+  assert_eq(format_release_age(Some(0L), now=0L), "<1h")
+  assert_eq(format_release_age(Some(0L), now=7200000L), "~2h")
+  assert_eq(format_release_age(Some(0L), now=864000000L), "~10d")
+  assert_eq(format_release_age(Some(0L), now=5184000000L), "~2mo")
+  assert_eq(format_release_age(Some(0L), now=31536000000L), "~1.0y")
+}
+
+///|
+async test "default preview shows ages and only queries displayed versions" {
+  let root = @fs.tmpdir(prefix="moon-taze-ages")
+  defer @fs.rmdir(root, recursive=true)
+  @fs.write_file(
+    root + "/moon.mod",
+    b"name = \"demo/app\"\nimport {\"demo/lib@1.0.0\"}",
+  )
+  let calls : Array[String] = []
+  let output : Array[String] = []
+  let now = @async.now()
+  assert_eq(
+    run_cli(
+      ["moon-taze", "-C", root],
+      fetch=name => {
+        @taze.ModuleMetadata(name, Some("1.1.0"), [
+          @taze.VersionMetadata("1.0.0", false, None, None),
+          @taze.VersionMetadata("1.0.1", false, None, None),
+          @taze.VersionMetadata("1.1.0", false, None, None),
+        ])
+      },
+      fetch_version=(_, version) => {
+        calls.push(version)
+        let age = if version == "1.0.0" { 5184000000L } else { 864000000L }
+        Some(@taze.VersionMetadata(version, false, None, Some(now - age)))
+      },
+      emit=line => output.push(line),
+    ),
+    0,
+  )
+  assert_eq(calls, ["1.0.0", "1.1.0"])
+  assert_true(output.any(line => line.contains("[age: ~2mo -> ~10d]")))
+}
+
+///|
 fn cli_fixture_fetch(
   name : String,
 ) -> @taze.ModuleMetadata raise @taze.RegistryError {

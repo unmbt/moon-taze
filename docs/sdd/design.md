@@ -234,7 +234,7 @@ moon-taze -I --maturity-period 7
 | `--sort <value>` | `diff-asc`；接受 diff/name/time 的 asc/desc |
 | `--group` / `--no-group` | true；按所属模块分组 |
 | `--timediff` | false；显示目标发布时间减当前发布时间 |
-| `--include-locked, -l` | 接受但不改变结果，帮助文本明确说明裸版本本已参与 |
+
 | `--force, -f` | false；忽略旧缓存，仍做本次请求去重 |
 | `--registry <url>` | `https://mooncakes.io`；不带 query、fragment 或 userinfo 的绝对 HTTP(S) 根；HTTP 只用于显式本地测试服务 |
 | `--concurrency <n>` | 10，正整数 |

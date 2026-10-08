@@ -31,5 +31,6 @@ let moon_mod : String =
   #|
   #|import {
   #|  "moonbitlang/async@0.21.3",
+  #|  "mizchi/tui@0.10.2",
   #|}
   #|

@@ -27,4 +27,5 @@ description = "A reliable interactive dependency update tool for MoonBit project
 
 import {
   "moonbitlang/async@0.21.3",
+  "mizchi/tui@0.10.2",
 }

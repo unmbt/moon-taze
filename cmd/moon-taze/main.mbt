@@ -1,12 +1,6 @@
 ///|
 fn usage() -> String {
-  let text =
-    #|moon-taze [default|major|minor|patch|latest|stable|newest|next] [options]
-    #|
-    #|Options: -C/--cwd, -w/--write, -I/--interactive, -a/--all, -r/--recursive, --json, --silent, --group/--no-group, --sort, --timediff/--no-timediff, --maturity-period, --maturity-period-exclude, --verify, --fail-on-outdated, --retry, --no-retry, -f/--force, --no-force, -l/--include-locked, -n/--include, -x/--exclude, -h/--help, -V/--version.
-    #|Default is read-only. --write applies all recommended updates to one moon.mod.
-    #|--interactive opens the taze-style keyboard UI: arrows move, space toggles, right selects a version, and Enter applies.
-  text
+  cli_command().render_help()
 }
 
 ///|
@@ -28,14 +22,6 @@ extern "C" fn moon_taze_stdin_isatty() -> Bool = "moon_taze_stdin_isatty"
 
 ///|
 #cfg(target="native")
-extern "C" fn moon_taze_interactive_start() -> Int = "moon_taze_interactive_start"
-
-///|
-#cfg(target="native")
-extern "C" fn moon_taze_interactive_stop() = "moon_taze_interactive_stop"
-
-///|
-#cfg(target="native")
 extern "C" fn moon_taze_get_console_output_cp() -> UInt = "moon_taze_get_console_output_cp"
 
 ///|
@@ -46,21 +32,6 @@ extern "C" fn moon_taze_set_console_output_cp(cp : UInt) = "moon_taze_set_consol
 #cfg(target="native")
 fn interactive_terminal_available() -> Bool {
   moon_taze_stdin_isatty()
-}
-
-///|
-fn interactive_start_raw() -> Unit raise {
-  let code = moon_taze_interactive_start()
-  if code != 0 {
-    cli_error(
-      "interactive_terminal: unable to enter raw input mode (native error \{code})",
-    )
-  }
-}
-
-///|
-fn interactive_stop_raw() -> Unit {
-  moon_taze_interactive_stop()
 }
 
 ///|
@@ -392,11 +363,11 @@ fn format_time_diff(current : Int64?, target : Int64?) -> String {
 ///|
 /// Format a release timestamp the same way taze presents version ages in its
 /// interactive table. The registry stores milliseconds since the Unix epoch.
-fn format_release_age(value : Int64?) -> String {
+fn format_release_age(value : Int64?, now? : Int64 = @async.now()) -> String {
   match value {
     None => "unknown"
     Some(published) => {
-      let elapsed = @async.now() - published
+      let elapsed = now - published
       if elapsed < 3600000L {
         "<1h"
       } else if elapsed < 360000000L {
@@ -411,252 +382,6 @@ fn format_release_age(value : Int64?) -> String {
       }
     }
   }
-}
-
-///|
-async fn interactive_key() -> String? {
-  let first = @stdio.stdin.read_exactly(1) catch { _ => return None }
-  if first[0] == 0x1b {
-    let second = @stdio.stdin.read_exactly(1) catch {
-      _ => return Some("escape")
-    }
-    if second[0] == b'[' {
-      let third = @stdio.stdin.read_exactly(1) catch {
-        _ => return Some("escape")
-      }
-      return Some(
-        match third[0] {
-          b'A' => "up"
-          b'B' => "down"
-          b'C' => "right"
-          b'D' => "left"
-          _ => "escape"
-        },
-      )
-    }
-    return Some("escape")
-  }
-  if first[0] == 0x00 || first[0] == 0xe0 {
-    let second = @stdio.stdin.read_exactly(1) catch { _ => return None }
-    return Some(
-      match second[0] {
-        0x48 => "up"
-        0x50 => "down"
-        0x4d => "right"
-        0x4b => "left"
-        _ => "other"
-      },
-    )
-  }
-  Some(
-    match first[0] {
-      3 => "escape"
-      b'\r' | b'\n' => "enter"
-      b' ' => "space"
-      b'a' | b'A' => "all"
-      b'q' | b'Q' => "escape"
-      b'h' | b'H' => "left"
-      b'j' | b'J' => "down"
-      b'k' | b'K' => "up"
-      b'l' | b'L' => "right"
-      _ => "other"
-    },
-  )
-}
-
-///|
-async fn interactive_screen(text : String) -> Unit {
-  @stdio.stdout.write(@utf8.encode("\u001b[2J\u001b[H" + text))
-}
-
-///|
-fn interactive_change_line(
-  change : @taze.DependencyChange,
-  target : String,
-  selected : Bool,
-  checked : Bool,
-  published_at : Map[String, Int64],
-) -> String {
-  let pointer = if selected { "❯" } else { " " }
-  let mark = if checked { "◉" } else { "◌" }
-  let suffix = if checked { "" } else { " (skipped)" }
-  let current_age = format_release_age(
-    published_at.get(change.dependency.name + "@" + change.dependency.version),
-  )
-  let target_age = format_release_age(
-    published_at.get(change.dependency.name + "@" + target),
-  )
-  "\{pointer} \{mark} \{change.dependency.name}  \{current_age} \{change.dependency.version} → \{target} \{target_age}\{suffix}"
-}
-
-///|
-async fn interactive_render_list(
-  changes : Array[@taze.DependencyChange],
-  targets : Array[String],
-  checked : Array[Bool],
-  selected : Int,
-  published_at : Map[String, Int64],
-) -> Unit {
-  let lines : Array[String] = [
-    "┃ ↑↓ select  space toggle  → change version", "┃ enter confirm  esc cancel  a select/unselect all",
-    "",
-  ]
-  for index, change in changes {
-    lines.push(
-      interactive_change_line(
-        change,
-        targets[index],
-        index == selected,
-        checked[index],
-        published_at,
-      ),
-    )
-  }
-  interactive_screen(lines.join("\n") + "\n")
-}
-
-///|
-async fn interactive_render_versions(
-  change : @taze.DependencyChange,
-  versions : Array[String],
-  selected : Int,
-  published_at : Map[String, Int64],
-) -> Unit {
-  let lines : Array[String] = [
-    "┃ Select a version for \{change.dependency.name} (current \{change.dependency.version})",
-    "┃ ↑↓ select  enter confirm  esc cancel",
-    "",
-  ]
-  let current_age = format_release_age(
-    published_at.get(change.dependency.name + "@" + change.dependency.version),
-  )
-  for index, version in versions {
-    let pointer = if index == selected { "❯" } else { " " }
-    let age = format_release_age(
-      published_at.get(change.dependency.name + "@" + version),
-    )
-    lines.push(
-      "\{pointer} \{current_age} \{change.dependency.version} → \{version} \{age}",
-    )
-  }
-  interactive_screen(lines.join("\n") + "\n")
-}
-
-///|
-async fn interactive_version_loop(
-  change : @taze.DependencyChange,
-  versions : Array[String],
-  selected : Int,
-  published_at : Map[String, Int64],
-) -> Int? {
-  let mut index = selected
-  for ;; {
-    interactive_render_versions(change, versions, index, published_at)
-    match interactive_key() {
-      None => return None
-      Some("escape") | Some("left") => return None
-      Some("up") => index = (index - 1 + versions.length()) % versions.length()
-      Some("down") => index = (index + 1) % versions.length()
-      Some("enter") | Some("right") => return Some(index)
-      _ => ()
-    }
-  }
-}
-
-///|
-async fn interactive_list_loop(
-  plan : @taze.CheckPlan,
-  changes : Array[@taze.DependencyChange],
-  targets : Array[String],
-  checked : Array[Bool],
-  selected : Int,
-  published_at : Map[String, Int64],
-) -> @taze.Selection? {
-  let mut index = selected
-  for ;; {
-    interactive_render_list(changes, targets, checked, index, published_at)
-    match interactive_key() {
-      None | Some("escape") => {
-        interactive_screen("\u001b[?25h")
-        return None
-      }
-      Some("up") => index = (index - 1 + changes.length()) % changes.length()
-      Some("down") => index = (index + 1) % changes.length()
-      Some("space") => checked[index] = !checked[index]
-      Some("all") => {
-        let all = checked.all(value => value)
-        for i in 0..<checked.length() {
-          checked[i] = !all
-        }
-      }
-      Some("right") => {
-        let change = changes[index]
-        let versions : Array[String] = []
-        let target = targets[index]
-        if target != "" {
-          versions.push(target)
-        }
-        for version in change.candidates {
-          if !versions.contains(version) {
-            versions.push(version)
-          }
-        }
-        if !versions.is_empty() {
-          match interactive_version_loop(change, versions, 0, published_at) {
-            Some(version_index) => {
-              targets[index] = versions[version_index]
-              checked[index] = true
-            }
-            None => ()
-          }
-        }
-      }
-      Some("enter") => {
-        let items : Array[(String, String, String)] = []
-        for i, item in changes {
-          if checked[i] {
-            items.push(
-              (item.dependency.manifest, item.dependency.name, targets[i]),
-            )
-          }
-        }
-        interactive_screen("\u001b[?25h")
-        if items.is_empty() {
-          return None
-        }
-        return Some(plan.selection(items))
-      }
-      _ => ()
-    }
-  }
-}
-
-///|
-/// Reproduce taze's keyboard-driven list: updates start selected, space
-/// toggles entries, arrows navigate, right opens version selection, enter
-/// applies the checked entries, and escape cancels without writing.
-async fn interactive_selection(
-  plan : @taze.CheckPlan,
-  emit~ : (String) -> Unit,
-  published_at : Map[String, Int64],
-) -> @taze.Selection? {
-  let changes = plan
-    .changes()
-    .filter(change => {
-      change.status is UpdateAvailable && change.target is Some(_)
-    })
-  if changes.is_empty() {
-    emit("No updates available")
-    return None
-  }
-  interactive_start_raw()
-  defer interactive_stop_raw()
-  let targets = changes.map(change => {
-    change.target.unwrap_or(change.dependency.version)
-  })
-  let checked = Array::make(changes.length(), true)
-  interactive_screen("\u001b[?25l")
-  interactive_list_loop(plan, changes, targets, checked, 0, published_at)
 }
 
 ///|
@@ -1208,16 +933,16 @@ async fn run_cli_inner(
   fetch_version : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError,
   interactive_tty : Bool?,
 ) -> Int {
-  if args.length() == 2 && (args[1] == "--help" || args[1] == "-h") {
+  let argv = argv_without_program(args)
+  let matches = cli_command().parse(argv=normalize_cli_argv(argv)) catch {
+    error => raise CliError::CliError(error.to_string())
+  }
+  if match_flag(matches, "help") {
     emit(usage())
     return 0
   }
-  if args.length() == 2 && args[1] == "-V" {
+  if match_flag(matches, "version") {
     emit(app_version())
-    return 0
-  }
-  if args.length() == 2 && args[1] == "--version" {
-    emit("moon-taze \{app_version()}")
     return 0
   }
   let mut mode = @taze.UpdateMode::Default
@@ -1248,126 +973,86 @@ async fn run_cli_inner(
   let include : Array[String] = []
   let exclude : Array[String] = []
   let mut mode_seen = false
-  let mut index = 1
-  while index < args.length() {
-    let arg = args[index]
-    if arg == "-a" || arg == "--all" {
-      show_all = true
-      all_seen = true
-    } else if arg == "-l" || arg == "--include-locked" {
-      // Bare versions are already part of the read-only P1a input.
-      ()
-    } else if arg == "-n" ||
-      arg == "--include" ||
-      arg == "-x" ||
-      arg == "--exclude" {
-      if index + 1 >= args.length() {
-        cli_error("missing value for \{arg}")
-      }
-      index += 1
-      if arg == "-n" || arg == "--include" {
-        append_selectors(include, args[index])
-      } else {
-        append_selectors(exclude, args[index])
-      }
-    } else if arg == "-w" || arg == "--write" {
-      write = true
-    } else if arg == "-I" || arg == "--interactive" {
-      interactive = true
-    } else if arg == "-r" || arg == "--recursive" {
-      recursive = true
-      recursive_seen = true
-    } else if arg == "--json" {
-      json_output = true
-    } else if arg == "--silent" || arg == "-s" {
-      silent = true
-    } else if arg == "--group" || arg == "--no-group" {
-      group_output = arg == "--group"
-    } else if arg == "--sort" {
-      if index + 1 >= args.length() {
-        cli_error("missing value for --sort")
-      }
-      index += 1
-      match args[index] {
+  show_all = match_flag(matches, "all")
+  write = match_flag(matches, "write")
+  interactive = match_flag(matches, "interactive")
+  json_output = match_flag(matches, "json")
+  silent = match_flag(matches, "silent")
+  verify = match_flag(matches, "verify")
+  recursive = match_flag(matches, "recursive")
+  recursive_seen = match_seen_from_argv(matches, "recursive")
+  all_seen = match_seen_from_argv(matches, "all")
+  group_output = match_flag(matches, "group")
+  force = match_flag(matches, "force")
+  force_seen = match_seen_from_argv(matches, "force")
+  fail_on_outdated = match_flag(matches, "fail-on-outdated")
+  fail_on_outdated_seen = match_seen_from_argv(matches, "fail-on-outdated")
+  timediff = match_flag(matches, "timediff")
+  timediff_seen = match_seen_from_argv(matches, "timediff")
+  maturity_seen = match_seen_from_argv(matches, "maturity-period")
+  maturity_exclude_seen = match_seen_from_argv(
+    matches, "maturity-period-exclude",
+  )
+  retry_seen = match_seen_from_argv(matches, "retry") ||
+    match_seen_from_argv(matches, "no-retry")
+  for selector in match_values(matches, "include") {
+    append_selectors(include, selector)
+  }
+  for selector in match_values(matches, "exclude") {
+    append_selectors(exclude, selector)
+  }
+  for selector in match_values(matches, "maturity-period-exclude") {
+    append_selectors(maturity_exclude, selector)
+  }
+  match match_value(matches, "cwd") {
+    Some(value) => cwd = value
+    None => ()
+  }
+  match match_value(matches, "sort") {
+    Some(value) =>
+      match value {
         "diff-asc"
         | "diff-desc"
         | "name-asc"
         | "name-desc"
         | "time-asc"
-        | "time-desc" => sort_mode = args[index]
-        _ => cli_error("invalid sort value: \{args[index]}")
+        | "time-desc" => sort_mode = value
+        _ => cli_error("invalid sort value: \{value}")
       }
-    } else if arg == "--verify" {
-      verify = true
-    } else if arg == "--force" || arg == "-f" {
-      force = true
-      force_seen = true
-    } else if arg == "--no-force" {
-      force = false
-      force_seen = true
-    } else if arg == "--fail-on-outdated" {
-      fail_on_outdated = true
-      fail_on_outdated_seen = true
-    } else if arg == "--no-fail-on-outdated" {
-      fail_on_outdated = false
-      fail_on_outdated_seen = true
-    } else if arg == "--timediff" {
-      timediff = true
-      timediff_seen = true
-    } else if arg == "--no-timediff" {
-      timediff = false
-      timediff_seen = true
-    } else if arg == "--maturity-period" {
-      maturity_seen = true
-      if index + 1 < args.length() && !args[index + 1].has_prefix("-") {
-        index += 1
-        maturity_days = @string.parse_int(args[index]) catch { _ => -1 }
-        if maturity_days < 0 {
-          cli_error("invalid maturity period: \{args[index]}")
-        }
-      } else {
-        maturity_days = 7
-      }
-    } else if arg == "--maturity-period-exclude" {
-      if index + 1 >= args.length() {
-        cli_error("missing value for --maturity-period-exclude")
-      }
-      index += 1
-      append_selectors(maturity_exclude, args[index])
-      maturity_exclude_seen = true
-    } else if arg == "--no-retry" {
-      retry_count = 0
-      retry_seen = true
-    } else if arg == "--retry" {
-      if index + 1 >= args.length() {
-        cli_error("missing value for --retry")
-      }
-      index += 1
-      retry_count = @string.parse_int(args[index]) catch { _ => -1 }
+    None => ()
+  }
+  match match_value(matches, "retry") {
+    Some(value) => {
+      retry_count = @string.parse_int(value) catch { _ => -1 }
       if retry_count < 0 {
-        cli_error("invalid retry count: \{args[index]}")
+        cli_error("invalid retry count: \{value}")
       }
-      retry_seen = true
-    } else if arg == "-C" || arg == "--cwd" {
-      if index + 1 >= args.length() {
-        cli_error("missing value for \{arg}")
-      }
-      index += 1
-      cwd = args[index]
-    } else if arg.has_prefix("-") {
-      cli_error("unknown option: \{arg}")
-    } else if !mode_seen {
-      match parse_mode(arg) {
-        Some(value) => {
-          mode = value
-          mode_seen = true
-        }
-        None => cli_error("unknown update mode: \{arg}")
-      }
-    } else {
-      cli_error("unexpected argument: \{arg}")
     }
-    index += 1
+    None => if match_flag(matches, "no-retry") { retry_count = 0 }
+  }
+  match match_value(matches, "maturity-period") {
+    Some(value) => {
+      maturity_days = @string.parse_int(value) catch { _ => -1 }
+      if maturity_days < 0 {
+        cli_error("invalid maturity period: \{value}")
+      }
+    }
+    None => ()
+  }
+  match matches.values.get("mode") {
+    Some(values) =>
+      match values.get(0) {
+        Some(value) =>
+          match parse_mode(value) {
+            Some(parsed) => {
+              mode = parsed
+              mode_seen = true
+            }
+            None => cli_error("unknown update mode: \{value}")
+          }
+        None => ()
+      }
+    None => ()
   }
   // Machine-readable output must never block on a terminal prompt.
   if json_output {
@@ -1700,6 +1385,38 @@ async fn run_cli_inner(
     }
   }
   let extra_diagnostics : Array[@taze.Diagnostic] = []
+  // Display ages without fetching the entire version history. Missing release
+  // details must not prevent an otherwise valid preview or update.
+  if !json_output && !silent && !interactive {
+    for change in plan.changes() {
+      if change.status is UpdateAvailable ||
+        (show_all && change.status is UpToDate) {
+        let versions = [change.dependency.version]
+        if change.target is Some(target) && !versions.contains(target) {
+          versions.push(target)
+        }
+        for version in versions {
+          let key = change.dependency.name + "@" + version
+          if !detail_times.contains(key) && !detail_missing.contains(key) {
+            let detail = fetch_version_with_retries(
+              fetch_version~,
+              change.dependency.name,
+              version,
+              retry_count,
+              retry_delay_ms,
+            ) catch {
+              _ => None
+            }
+            match detail {
+              Some(value) if value.published_at is Some(time) =>
+                detail_times[key] = time
+              _ => detail_missing[key] = true
+            }
+          }
+        }
+      }
+    }
+  }
   if timediff {
     for change in plan.changes() {
       match change.target {
@@ -1749,6 +1466,14 @@ async fn run_cli_inner(
       UpdateAvailable => {
         let target = change.target.unwrap_or("?")
         let mode_text = mode_name(change.mode)
+        let current_age = format_release_age(
+          detail_times.get(
+            change.dependency.name + "@" + change.dependency.version,
+          ),
+        )
+        let target_age = format_release_age(
+          detail_times.get(change.dependency.name + "@" + target),
+        )
         let timediff_text = if timediff {
           let current = detail_times.get(
             change.dependency.name + "@" + change.dependency.version,
@@ -1761,13 +1486,18 @@ async fn run_cli_inner(
           ""
         }
         emit(
-          "\{change.dependency.name} \{change.dependency.version} -> \{target} (\{mode_text})\{timediff_text}",
+          "\{change.dependency.name} \{change.dependency.version} -> \{target} (\{mode_text}) [age: \{current_age} -> \{target_age}]\{timediff_text}",
         )
       }
       UpToDate =>
         if show_all {
+          let age = format_release_age(
+            detail_times.get(
+              change.dependency.name + "@" + change.dependency.version,
+            ),
+          )
           emit(
-            "\{change.dependency.name} \{change.dependency.version} up-to-date",
+            "\{change.dependency.name} \{change.dependency.version} up-to-date [age: \{age}]",
           )
         }
       NoCandidate => emit("\{change.dependency.name} no candidate")
@@ -1805,7 +1535,7 @@ async fn run_cli_inner(
   }
   let mut interactive_selection_result : @taze.Selection? = None
   if interactive {
-    match interactive_selection(plan, emit~, detail_times) {
+    match interactive_selection_tui(plan, emit~, detail_times) {
       Some(selection) => {
         interactive_selection_result = Some(selection)
         write = true
