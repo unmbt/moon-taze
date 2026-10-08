@@ -4,15 +4,6 @@ fn usage() -> String {
 }
 
 ///|
-fn app_version() -> String {
-  let marker = "version = \""
-  guard moon_mod.find(marker) is Some(start) else { return "unknown" }
-  let rest = moon_mod[start + marker.length():]
-  guard rest.find("\"") is Some(length) else { return "unknown" }
-  rest[:length].to_owned()
-}
-
-///|
 #cfg(target="native")
 extern "C" fn terminate_process(code : Int) = "exit"
 
@@ -942,7 +933,7 @@ async fn run_cli_inner(
     return 0
   }
   if match_flag(matches, "version") {
-    emit(app_version())
+    emit(VERSION)
     return 0
   }
   let mut mode = @taze.UpdateMode::Default

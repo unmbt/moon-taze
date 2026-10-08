@@ -15,13 +15,17 @@ pkgtype(kind: "executable")
 
 supported_targets = "native"
 
+rule(
+  name: "gen_version",
+  command: "moon run tools/gen_version.mbtx $input $output",
+)
+
+dev_build(
+  rule: "gen_version",
+  input: "../../moon.mod",
+  output: "generated_version.mbt",
+)
+
 options(
   "native-stub": [ "interactive_native.c" ],
-  "pre-build": [
-    {
-      "input": "../../moon.mod",
-      "output": "embedded_mod.mbt",
-      "command": ":embed -i $input -o $output --name moon_mod",
-    },
-  ],
 )
