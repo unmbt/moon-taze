@@ -1,5 +1,0 @@
-members = [
-  ".",
-  "../moon-manifest",
-  "../native-toolchain",
-]

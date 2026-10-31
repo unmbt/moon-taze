@@ -1292,6 +1292,17 @@ async fn run_cli_inner(
       }
     }
   }
+  let mut progress_total = 0
+  for manifest in manifests {
+    progress_total += manifest.dependencies.length()
+  }
+  let progress_enabled = match interactive_tty {
+    Some(true) => !json_output && !silent && progress_total > 0
+    _ => false
+  }
+  let progress = progress_bar(progress_total, progress_enabled)
+  progress_bar_start(progress)
+  defer progress_bar_stop(progress)
   let need_release_times = interactive ||
     timediff ||
     sort_mode == "time-asc" ||
@@ -1302,6 +1313,7 @@ async fn run_cli_inner(
   let detail_times : Map[String, Int64] = Map([])
   let detail_missing : Map[String, Bool] = Map([])
   let effective_fetch : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError = name => {
+    defer progress_bar_update(progress, name)
     let registry_root = "https://mooncakes.io"
     let key = cache_key(registry_root, name)
     if !force {
@@ -1366,6 +1378,7 @@ async fn run_cli_inner(
     cwd~,
     fetch=effective_fetch,
   )
+  progress_bar_stop(progress)
   if !json_output && !silent {
     for diagnostic in plan.diagnostics() {
       let level = match diagnostic.severity {

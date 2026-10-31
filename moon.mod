@@ -11,7 +11,7 @@
 
 name = "unmbt/moon-taze"
 
-version = "0.1.2"
+version = "0.1.1"
 
 readme = "README.md"
 
