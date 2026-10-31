@@ -11,7 +11,7 @@
 
 name = "unmbt/moon-taze"
 
-version = "0.1.1"
+version = "0.1.2"
 
 readme = "README.md"
 
@@ -26,6 +26,12 @@ preferred_target = "native"
 description = "A reliable interactive dependency update tool for MoonBit projects."
 
 import {
-  "moonbitlang/async@0.21.3",
+  "moonbitlang/async@0.22.5",
+  "unmbt/moon-manifest@0.1.0",
+  "unmbt/native-toolchain@0.1.0",
   "mizchi/tui@0.10.2",
+  "mizchi/tui-terminal-buffer@0.1.4",
+  "mizchi/crater-core@0.19.0",
+  "mizchi/crater-layout@0.19.1",
+  "mizchi/css@0.7.4",
 }

@@ -37,7 +37,7 @@ pub fn parse_version(String) -> SemVer raise SemVerError
 
 pub async fn query_mooncakes(root~ : String, String) -> ModuleMetadata raise RegistryError
 
-pub async fn query_mooncakes_retry(root~ : String, String, retries~ : Int, delay_ms~ : Int) -> ModuleMetadata raise RegistryError
+pub async fn query_mooncakes_retry(root~ : String, String, retries~ : Int32, delay_ms~ : Int32) -> ModuleMetadata raise RegistryError
 
 pub async fn query_mooncakes_version(root~ : String, String, String) -> VersionMetadata raise RegistryError
 
@@ -55,7 +55,7 @@ pub fn selector_valid(String) -> Bool
 
 pub fn valid_metadata(ModuleMetadata, String) -> Bool
 
-pub fn warning_diagnostic(String, String, String?, String?, Int?, Int?) -> Diagnostic
+pub fn warning_diagnostic(String, String, String?, String?, Int32?, Int32?) -> Diagnostic
 
 // Errors
 pub suberror RegistryError {
@@ -78,10 +78,10 @@ pub struct ApplyReport {
   diagnostics : Array[Diagnostic]
 }
 pub fn ApplyReport::diagnostics(Self) -> Array[Diagnostic]
-pub fn ApplyReport::exit_code(Self) -> Int
+pub fn ApplyReport::exit_code(Self) -> Int32
 pub fn ApplyReport::files(Self) -> Array[FileApplyResult]
 pub fn ApplyReport::status(Self) -> ApplyStatus
-pub fn ApplyReport::written_files(Self) -> Int
+pub fn ApplyReport::written_files(Self) -> Int32
 
 pub(all) enum ApplyStatus {
   Succeeded
@@ -128,11 +128,11 @@ pub struct Config {
   include : Array[String]?
   exclude : Array[String]?
   ignoreOtherWorkspaces : Bool?
-  retry : Int?
+  retry : Int32?
   force : Bool?
   failOnOutdated : Bool?
   timediff : Bool?
-  maturityPeriod : Int?
+  maturityPeriod : Int32?
   maturityPeriodExclude : Array[String]?
 } derive(Eq, @debug.Debug, @json.FromJson)
 
@@ -173,8 +173,8 @@ pub struct Diagnostic {
   message : String
   manifest : String?
   dependency : String?
-  line : Int?
-  column : Int?
+  line : Int32?
+  column : Int32?
 } derive(Eq, @debug.Debug)
 
 pub enum DiagnosticSeverity {
@@ -192,9 +192,9 @@ pub enum DiffKind {
 pub struct FileApplyResult {
   manifest : String
   status : FileApplyStatus
-  changed_dependencies : Int
+  changed_dependencies : Int32
 }
-pub fn FileApplyResult::changed_dependencies(Self) -> Int
+pub fn FileApplyResult::changed_dependencies(Self) -> Int32
 pub fn FileApplyResult::manifest(Self) -> String
 pub fn FileApplyResult::status(Self) -> FileApplyStatus
 
@@ -227,10 +227,10 @@ pub struct ParseResult {
 pub struct Policy {
   mode : UpdateMode
   exclude : Array[String]
-  maturity_days : Int
+  maturity_days : Int32
   maturity_exclude : Array[String]
 } derive(Eq, @debug.Debug)
-pub fn Policy::Policy(UpdateMode, exclude? : Array[String], maturity_days? : Int, maturity_exclude? : Array[String]) -> Self
+pub fn Policy::Policy(UpdateMode, exclude? : Array[String], maturity_days? : Int32, maturity_exclude? : Array[String]) -> Self
 
 type RegistryDetail derive(@debug.Debug, @json.FromJson)
 
@@ -240,10 +240,10 @@ type RegistryVersion derive(@debug.Debug, @json.FromJson)
 
 pub struct ReleaseOptions {
   now_ms : Int64
-  maturity_days : Int
+  maturity_days : Int32
   maturity_exclude : Array[String]
 } derive(Eq, @debug.Debug)
-pub fn ReleaseOptions::ReleaseOptions(Int64, Int, maturity_exclude? : Array[String]) -> Self
+pub fn ReleaseOptions::ReleaseOptions(Int64, Int32, maturity_exclude? : Array[String]) -> Self
 
 pub struct Selection {
   // private fields
@@ -251,20 +251,20 @@ pub struct Selection {
 pub fn Selection::items(Self) -> Array[(String, String, String)]
 
 pub struct SemVer {
-  major : Int
-  minor : Int
-  patch : Int
+  major : Int32
+  minor : Int32
+  patch : Int32
   prerelease : Array[String]
   build : Array[String]
 } derive(Eq, @debug.Debug)
-pub fn SemVer::compare(Self, Self) -> Int
+pub fn SemVer::compare(Self, Self) -> Int32
 pub fn SemVer::to_string(Self) -> String
 
 pub struct SourceSpan {
-  start : Int
-  end : Int
-  line : Int
-  column : Int
+  start : Int32
+  end : Int32
+  line : Int32
+  column : Int32
 } derive(Eq, @debug.Debug)
 
 pub(all) enum UpdateMode {

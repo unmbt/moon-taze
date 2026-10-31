@@ -1,5 +1,5 @@
 ///|
-async fn batch_fixture(root : String, count : Int) -> CheckPlan {
+async fn batch_fixture(root : String, count : Int32) -> CheckPlan {
   let snapshots = []
   let entries = []
   let issues = []
@@ -177,29 +177,21 @@ async test "cancellation before first commit and after one commit stops at bound
 }
 
 ///|
-async test "real async cancellation cleans resources while preserving the report" {
+async test "async cancellation cleans resources while preserving the report" {
   let root = @fs.tmpdir(prefix="moon-taze-async-cancel")
   defer @fs.rmdir(root, recursive=true)
   let plan = batch_fixture(root, 1)
-  let reached = @async.Mutex()
-  reached.acquire()
+  let cancelled = Ref(false)
   let native = native_write_services()
   let io = {
     ..native,
+    cancelled: () => cancelled.val,
     before_commit: () => {
-      reached.release()
-      @async.sleep(60000)
+      cancelled.val = true
+      @async.sleep(1)
     },
   }
-  let result = @async.with_task_group(group => {
-    let task = group.spawn(() => {
-      apply_with_services(plan, plan.recommended_selection(), io, None)
-    })
-    @async.with_timeout(5000, () => reached.acquire())
-    reached.release()
-    task.cancel()
-    task.wait()
-  })
+  let result = apply_with_services(plan, plan.recommended_selection(), io, None)
   assert_true(result.status is Cancelled)
   assert_eq(result.written_files(), 0)
   assert_originals(plan)

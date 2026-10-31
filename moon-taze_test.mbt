@@ -397,10 +397,7 @@ async test "workspace members are local and shared registry requests are dedupli
     @utf8.encode(
       (
         #|// the string in this comment is not a member: "ignored"
-        #|workspace {
-        #|  "apps/a",
-        #|  "libs/b",
-        #|}
+        #|members = ["apps/a", "libs/b"]
       ),
     ),
   )

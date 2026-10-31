@@ -34,50 +34,17 @@ fn is_ident_byte(value : Byte) -> Bool {
 /// This intentionally accepts only the scalar `name = "..."` declaration;
 /// the manifest parser remains authoritative for dependency syntax.
 pub fn module_name_from_source(source : Bytes) -> String {
-  let text = if source.length() >= 3 &&
-    source[0] == 0xef &&
-    source[1] == 0xbb &&
-    source[2] == 0xbf {
-    @utf8.decode_lossy(source[3:])
-  } else {
-    @utf8.decode_lossy(source)
-  }
-  for line in text.split("\n") {
-    let line = line.trim().to_owned()
-    if line.has_prefix("name") &&
-      (
-        line.length() == 4 ||
-        line[4] == ' ' ||
-        line[4] == '\t' ||
-        line[4] == '='
-      ) {
-      match line.split_once("=") {
-        Some((_, right)) => {
-          let value = right.trim()
-          if value.length() >= 2 && value[0] == '"' {
-            let mut index = 1
-            let mut escaped = false
-            while index < value.length() {
-              if escaped {
-                escaped = false
-              } else if value[index] == '\\' {
-                escaped = true
-              } else if value[index] == '"' {
-                return value[1:index].to_owned()
-              }
-              index += 1
-            }
-          }
-        }
-        None => ()
-      }
-    }
-  }
-  ""
+  @moon_manifest.parse(
+    @moon_manifest.Mod,
+    @utf8.decode_lossy(source),
+    path="moon.mod",
+  )
+  .module_name()
+  .unwrap_or("")
 }
 
 ///|
-fn skip_space(source : Bytes, start : Int) -> Int {
+fn skip_space(source : Bytes, start : Int32) -> Int32 {
   let mut index = start
   while index < source.length() && is_space_byte(source[index]) {
     index += 1
@@ -86,7 +53,7 @@ fn skip_space(source : Bytes, start : Int) -> Int {
 }
 
 ///|
-fn skip_trivia(source : Bytes, start : Int) -> Int {
+fn skip_trivia(source : Bytes, start : Int32) -> Int32 {
   let mut index = start
   let mut again = true
   while again {
@@ -117,7 +84,7 @@ fn skip_trivia(source : Bytes, start : Int) -> Int {
 }
 
 ///|
-fn line_column(source : Bytes, offset : Int) -> (Int, Int) {
+fn line_column(source : Bytes, offset : Int32) -> (Int32, Int32) {
   let mut line = 1
   let mut column = 1
   for index in 0..<offset {
@@ -132,7 +99,7 @@ fn line_column(source : Bytes, offset : Int) -> (Int, Int) {
 }
 
 ///|
-fn find_matching_brace(source : Bytes, start : Int) -> Int? {
+fn find_matching_brace(source : Bytes, start : Int32) -> Int32? {
   let mut depth = 0
   let mut index = start
   let mut in_string = false
@@ -185,7 +152,7 @@ fn find_matching_brace(source : Bytes, start : Int) -> Int? {
 }
 
 ///|
-fn decode_string(source : Bytes, start : Int, end : Int) -> String? {
+fn decode_string(source : Bytes, start : Int32, end : Int32) -> String? {
   let result = StringBuilder()
   let mut index = start + 1
   while index < end {
@@ -255,8 +222,8 @@ fn parse_dependency_text(value : String) -> (String, String)? {
 }
 
 ///|
-fn find_unescaped_at(source : Bytes, start : Int, end : Int) -> Int? {
-  let mut result : Int? = None
+fn find_unescaped_at(source : Bytes, start : Int32, end : Int32) -> Int32? {
+  let mut result : Int32? = None
   let mut index = start
   let mut escaped = false
   while index < end {

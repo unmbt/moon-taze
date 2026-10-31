@@ -24,86 +24,12 @@ pub struct WorkspaceParseResult {
 
 ///|
 fn workspace_string_values(source : Bytes) -> (Array[String], Bool) {
-  let values : Array[String] = []
-  let mut body_start : Int? = None
-  let mut index = 0
-  while index + 1 < source.length() {
-    if source[index] == b'/' && source[index + 1] == b'/' {
-      index += 2
-      while index < source.length() && source[index] != b'\n' {
-        index += 1
-      }
-      continue
-    }
-    if source[index] == b'/' && source[index + 1] == b'*' {
-      index += 2
-      while index + 1 < source.length() &&
-            !(source[index] == b'*' && source[index + 1] == b'/') {
-        index += 1
-      }
-      index += 2
-      continue
-    }
-    if source[index] == b'{' {
-      body_start = Some(index)
-      break
-    }
-    index += 1
-  }
-  match body_start {
-    None => (values, false)
-    Some(start_body) => {
-      let end_body = find_matching_brace(source, start_body).unwrap_or(
-        source.length(),
-      )
-      index = start_body + 1
-      while index < end_body {
-        if source[index] == b'/' &&
-          index + 1 < end_body &&
-          source[index + 1] == b'/' {
-          index += 2
-          while index < end_body && source[index] != b'\n' {
-            index += 1
-          }
-          continue
-        }
-        if source[index] == b'/' &&
-          index + 1 < end_body &&
-          source[index + 1] == b'*' {
-          index += 2
-          while index + 1 < end_body &&
-                !(source[index] == b'*' && source[index + 1] == b'/') {
-            index += 1
-          }
-          index += 2
-          continue
-        }
-        if source[index] == b'"' {
-          let string_start = index
-          index += 1
-          let mut escaped = false
-          while index < end_body {
-            if escaped {
-              escaped = false
-            } else if source[index] == b'\\' {
-              escaped = true
-            } else if source[index] == b'"' {
-              break
-            }
-            index += 1
-          }
-          if index < end_body {
-            match decode_string(source, string_start, index) {
-              Some(value) => values.push(value)
-              None => ()
-            }
-          }
-        }
-        index += 1
-      }
-      (values, true)
-    }
-  }
+  let document = @moon_manifest.parse(
+    @moon_manifest.Work,
+    @utf8.decode_lossy(source),
+    path="moon.work",
+  )
+  (document.members(), document.diagnostics.is_empty())
 }
 
 ///|
@@ -147,7 +73,7 @@ pub async fn read_workspace(path : String) -> WorkspaceParseResult {
       diagnostics: [
         diagnostic(
           "invalid_workspace",
-          "moon.work must contain a non-empty workspace block",
+          "moon.work must contain a non-empty members array",
           Some(path),
           None,
           None,
