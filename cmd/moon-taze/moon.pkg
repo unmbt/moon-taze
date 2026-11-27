@@ -1,14 +1,14 @@
 import {
   "unmbt/moon-taze" @taze,
-  "moonbitlang/core/argparse",
-  "moonbitlang/async",
-  "moonbitlang/async/fs",
-  "moonbitlang/async/process",
+  "unmbt/cac",
+  "moonbitlang/core/async",
+  "moonbitlang/core/async/fs",
+  "moonbitlang/core/async/process",
+  "moonbitlang/core/async/stdio",
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
   "moonbitlang/core/json",
   "moonbitlang/core/string",
-  "mizchi/tui",
 }
 
 pkgtype(kind: "executable")
@@ -27,5 +27,5 @@ dev_build(
 )
 
 options(
-  "native-stub": [ "interactive_native.c" ],
+  "native-stub": [ "terminal_native.c" ],
 )

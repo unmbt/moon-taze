@@ -1,31 +1,33 @@
 ///|
 /// A member declared by a `moon.work` file.
+#derive(Eq, Debug)
 pub struct WorkspaceMember {
-  pub directory : String
-  pub manifest : Manifest
-  pub module_name : String
-} derive(Debug, Eq)
+  directory : String
+  manifest : Manifest
+  module_name : String
+}
 
 ///|
-/// A read-only workspace snapshot. The source bytes are retained for stale-plan
-/// checks by callers that choose to apply a combined plan.
+/// A read-only workspace snapshot.
+#derive(Eq, Debug)
 pub struct Workspace {
-  pub root : String
-  pub path : String
-  pub source : Bytes
-  pub members : Array[WorkspaceMember]
-} derive(Debug, Eq)
+  root : String
+  path : String
+  source : Bytes
+  members : Array[WorkspaceMember]
+}
 
 ///|
+#derive(Eq, Debug)
 pub struct WorkspaceParseResult {
-  pub workspace : Workspace?
-  pub diagnostics : Array[Diagnostic]
-} derive(Debug, Eq)
+  workspace : Workspace?
+  diagnostics : Array[Diagnostic]
+}
 
 ///|
 fn workspace_string_values(source : Bytes) -> (Array[String], Bool) {
   let document = @moon_manifest.parse(
-    @moon_manifest.Work,
+    Work,
     @utf8.decode_lossy(source),
     path="moon.work",
   )
@@ -33,10 +35,9 @@ fn workspace_string_values(source : Bytes) -> (Array[String], Bool) {
 }
 
 ///|
-/// Read and parse a MoonBit workspace. Members are explicit directories; no
-/// glob expansion is performed.
+/// Read and parse a MoonBit workspace (`moon.work`).
 pub async fn read_workspace(path : String) -> WorkspaceParseResult {
-  let data = @fs.read_file(path) catch {
+  let source = @fs.read_binary(path) catch {
     error =>
       return {
         workspace: None,
@@ -52,7 +53,6 @@ pub async fn read_workspace(path : String) -> WorkspaceParseResult {
         ],
       }
   }
-  let source = data.binary()
   let root = match path.rev_split_once("/") {
     Some((left, _)) => if left == "" { "/" } else { left.to_owned() }
     None =>
@@ -66,8 +66,8 @@ pub async fn read_workspace(path : String) -> WorkspaceParseResult {
         None => "."
       }
   }
-  let (paths, has_block) = workspace_string_values(source)
-  if !has_block || paths.is_empty() {
+  let (paths, valid) = workspace_string_values(source)
+  if !valid || paths.is_empty() {
     return {
       workspace: None,
       diagnostics: [
@@ -93,7 +93,7 @@ pub async fn read_workspace(path : String) -> WorkspaceParseResult {
       diagnostics.push(
         diagnostic(
           "invalid_workspace_member",
-          "workspace member must be a relative directory: {relative}",
+          "workspace member must be a relative directory: \{relative}",
           Some(path),
           Some(relative),
           None,
@@ -108,7 +108,7 @@ pub async fn read_workspace(path : String) -> WorkspaceParseResult {
       diagnostics.push(
         diagnostic(
           "workspace_member_missing",
-          "workspace member has no moon.mod: {relative}",
+          "workspace member has no moon.mod: \{relative}",
           Some(path),
           Some(relative),
           None,
@@ -131,7 +131,7 @@ pub async fn read_workspace(path : String) -> WorkspaceParseResult {
       )
       continue
     }
-    let bytes = @fs.read_file(manifest_path) catch {
+    let bytes = @fs.read_binary(manifest_path) catch {
       error => {
         diagnostics.push(
           diagnostic(
@@ -146,15 +146,9 @@ pub async fn read_workspace(path : String) -> WorkspaceParseResult {
         continue
       }
     }
-    let module_name = module_name_from_source(bytes.binary())
-    let parsed = parse_manifest(
-      bytes.binary(),
-      path=manifest_path,
-      module_name~,
-    )
-    for item in parsed.diagnostics {
-      diagnostics.push(item)
-    }
+    let module_name = module_name_from_source(bytes)
+    let parsed = parse_manifest(bytes, path=manifest_path, module_name~)
+    diagnostics.append(parsed.diagnostics)
     match parsed.manifest {
       None => ()
       Some(manifest) =>
@@ -162,7 +156,7 @@ pub async fn read_workspace(path : String) -> WorkspaceParseResult {
           diagnostics.push(
             diagnostic(
               "duplicate_workspace_module",
-              "workspace contains duplicate module name: {manifest.module_name}",
+              "workspace contains duplicate module name: \{manifest.module_name}",
               Some(manifest_path),
               Some(manifest.module_name),
               None,

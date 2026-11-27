@@ -20,22 +20,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install MoonBit (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
-
-      - name: Install MoonBit (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          irm https://cli.moonbitlang.com/install/powershell.ps1 | iex
-          (Join-Path $env:USERPROFILE '.moon\\bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Setup MoonBit
+        uses: hustcer/setup-moonbit@v1
+        with:
+          version: '1.0.0-rc1+3c0520448'
+          core-version: '1.0.0-rc1+3c0520448'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update dependencies
         run: moon update
 
       - name: Validate Native release
-        run: moon run --target native tools/p4_release_check.mbtx
+        run: moon run --target native tools/release_check.mbtx

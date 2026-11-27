@@ -1,26 +1,107 @@
 ///|
-/// Static configuration loaded from the single `moon-taze.json` at the
-/// invocation root. CLI parsing and write/verify decisions remain in the CLI.
+/// Static configuration loaded from `moon-taze.json` at the project or workspace root.
+#derive(Eq, Debug)
 pub struct Config {
-  pub mode : String?
-  pub recursive : Bool?
-  pub all : Bool?
-  pub include : Array[String]?
-  pub exclude : Array[String]?
-  pub ignoreOtherWorkspaces : Bool?
-  pub retry : Int?
-  pub force : Bool?
-  pub failOnOutdated : Bool?
-  pub timediff : Bool?
-  pub maturityPeriod : Int?
-  pub maturityPeriodExclude : Array[String]?
-} derive(FromJson, Debug, Eq)
+  mode : String?
+  recursive : Bool?
+  all : Bool?
+  include_selectors : Array[String]?
+  exclude : Array[String]?
+  ignoreOtherWorkspaces : Bool?
+  retry : Int32?
+  force : Bool?
+  failOnOutdated : Bool?
+  timediff : Bool?
+  maturityPeriod : Int32?
+  maturityPeriodExclude : Array[String]?
+  githubActions : Json?
+  githubActionsStyle : String?
+}
 
 ///|
+fn decode_optional_string(
+  obj : Map[String, Json],
+  key : String,
+) -> String? raise {
+  match obj.get(key) {
+    None | Some(Null) => None
+    Some(String(s)) => Some(s)
+    Some(_) => fail("\{key} must be a string")
+  }
+}
+
+///|
+fn decode_optional_bool(obj : Map[String, Json], key : String) -> Bool? raise {
+  match obj.get(key) {
+    None | Some(Null) => None
+    Some(True) => Some(true)
+    Some(False) => Some(false)
+    Some(_) => fail("\{key} must be a boolean")
+  }
+}
+
+///|
+fn decode_optional_int(obj : Map[String, Json], key : String) -> Int32? raise {
+  match obj.get(key) {
+    None | Some(Null) => None
+    Some(Number(n, ..)) => {
+      let i = n.to_int()
+      if i.to_double() != n {
+        fail("\{key} must be an integer")
+      }
+      Some(i)
+    }
+    Some(_) => fail("\{key} must be an integer")
+  }
+}
+
+///|
+fn decode_optional_strings(
+  obj : Map[String, Json],
+  key : String,
+) -> Array[String]? raise {
+  match obj.get(key) {
+    None | Some(Null) => None
+    Some(Array(items)) => {
+      let result : Array[String] = []
+      for item in items {
+        match item {
+          String(s) => result.push(s)
+          _ => fail("\{key} must be an array of strings")
+        }
+      }
+      Some(result)
+    }
+    Some(_) => fail("\{key} must be an array of strings")
+  }
+}
+
+///|
+fn decode_config(obj : Map[String, Json]) -> Config raise {
+  {
+    mode: decode_optional_string(obj, "mode"),
+    recursive: decode_optional_bool(obj, "recursive"),
+    all: decode_optional_bool(obj, "all"),
+    include_selectors: decode_optional_strings(obj, "include"),
+    exclude: decode_optional_strings(obj, "exclude"),
+    ignoreOtherWorkspaces: decode_optional_bool(obj, "ignoreOtherWorkspaces"),
+    retry: decode_optional_int(obj, "retry"),
+    force: decode_optional_bool(obj, "force"),
+    failOnOutdated: decode_optional_bool(obj, "failOnOutdated"),
+    timediff: decode_optional_bool(obj, "timediff"),
+    maturityPeriod: decode_optional_int(obj, "maturityPeriod"),
+    maturityPeriodExclude: decode_optional_strings(obj, "maturityPeriodExclude"),
+    githubActions: obj.get("githubActions"),
+    githubActionsStyle: decode_optional_string(obj, "githubActionsStyle"),
+  }
+}
+
+///|
+#derive(Eq, Debug)
 pub struct ConfigResult {
-  pub config : Config?
-  pub diagnostics : Array[Diagnostic]
-} derive(Debug, Eq)
+  config : Config?
+  diagnostics : Array[Diagnostic]
+}
 
 ///|
 fn duplicate_top_level_key(text : String) -> String? {
@@ -76,9 +157,58 @@ fn duplicate_top_level_key(text : String) -> String? {
 }
 
 ///|
-/// Parse one configuration file without executing any user supplied code.
+/// Resolve GitHub Actions enabled flag and style from a `Config`.
+/// Returns `Err(message)` when `githubActions` or `githubActionsStyle` is malformed.
+pub fn Config::resolve_github_actions(
+  self : Config,
+) -> (Bool?, GitHubActionStyle?) raise {
+  let mut enabled : Bool? = None
+  let mut style : GitHubActionStyle? = None
+  match self.githubActions {
+    None | Some(Null) => ()
+    Some(True) => enabled = Some(true)
+    Some(False) => enabled = Some(false)
+    Some(Object(obj)) => {
+      enabled = Some(true)
+      for key, value in obj {
+        match (key, value) {
+          ("style", String(s)) =>
+            match parse_gha_style(s) {
+              Some(parsed) => style = Some(parsed)
+              None => fail("invalid githubActions.style: \{s}")
+            }
+          _ => fail("unknown or invalid githubActions field: \{key}")
+        }
+      }
+    }
+    Some(_) => fail("githubActions must be a boolean or an object")
+  }
+  match self.githubActionsStyle {
+    None => ()
+    Some(s) =>
+      match parse_gha_style(s) {
+        Some(parsed) => style = Some(parsed)
+        None => fail("invalid githubActionsStyle: \{s}")
+      }
+  }
+  (enabled, style)
+}
+
+///|
+/// Parse a GitHub Actions write style name (`auto` | `tag` | `sha`).
+pub fn parse_gha_style(value : String) -> GitHubActionStyle? {
+  match value {
+    "auto" => Some(Auto)
+    "tag" => Some(Tag)
+    "sha" => Some(Sha)
+    _ => None
+  }
+}
+
+///|
+/// Parse one `moon-taze.json` configuration file without executing user code.
 pub async fn read_config(path : String) -> ConfigResult {
-  let data = @fs.read_file(path) catch {
+  let text = @fs.read_text(path) catch {
     error =>
       return {
         config: None,
@@ -94,23 +224,20 @@ pub async fn read_config(path : String) -> ConfigResult {
         ],
       }
   }
-  let text = data.text()
-  match duplicate_top_level_key(text) {
-    Some(key) =>
-      return {
-        config: None,
-        diagnostics: [
-          diagnostic(
-            "invalid_config",
-            "duplicate configuration key: {key}",
-            Some(path),
-            None,
-            None,
-            None,
-          ),
-        ],
-      }
-    None => ()
+  if duplicate_top_level_key(text) is Some(key) {
+    return {
+      config: None,
+      diagnostics: [
+        diagnostic(
+          "invalid_config",
+          "duplicate configuration key: \{key}",
+          Some(path),
+          None,
+          None,
+          None,
+        ),
+      ],
+    }
   }
   let value = @json.parse(text) catch {
     error =>
@@ -128,11 +255,12 @@ pub async fn read_config(path : String) -> ConfigResult {
         ],
       }
   }
-  match value {
-    Json::Object(object) => {
+  let object = match value {
+    Object(object) => {
       let allowed = [
         "mode", "recursive", "all", "include", "exclude", "ignoreOtherWorkspaces",
         "retry", "force", "failOnOutdated", "timediff", "maturityPeriod", "maturityPeriodExclude",
+        "githubActions", "githubActionsStyle",
       ]
       for key in object.keys() {
         if !allowed.contains(key) {
@@ -141,7 +269,7 @@ pub async fn read_config(path : String) -> ConfigResult {
             diagnostics: [
               diagnostic(
                 "invalid_config",
-                "unknown configuration key: {key}",
+                "unknown configuration key: \{key}",
                 Some(path),
                 None,
                 None,
@@ -151,6 +279,7 @@ pub async fn read_config(path : String) -> ConfigResult {
           }
         }
       }
+      object
     }
     _ =>
       return {
@@ -167,7 +296,7 @@ pub async fn read_config(path : String) -> ConfigResult {
         ],
       }
   }
-  let config : Config = @json.from_json(value) catch {
+  let config : Config = decode_config(object) catch {
     error =>
       return {
         config: None,

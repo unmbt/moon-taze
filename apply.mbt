@@ -1,11 +1,24 @@
 ///|
+priv suberror WriteError {
+  WriteError(String, String, String?)
+}
+
+///|
+fn write_error(
+  code : String,
+  message : String,
+  manifest? : String,
+) -> Unit raise {
+  raise WriteError(code, message, manifest)
+}
+
+///|
 priv struct OwnedFile {
   path : String
   identity : Bytes
 }
 
 ///|
-// Internal IO boundary; production CLI and fault-injection tests use this engine.
 priv struct WriteServices {
   normalize : async (String) -> String
   inspect : async (String) -> Unit
@@ -21,6 +34,13 @@ priv struct WriteServices {
 }
 
 ///|
+priv struct PreparedManifest {
+  snapshot : Manifest
+  output : Bytes
+  count : Int32
+}
+
+///|
 priv struct PendingWrite {
   path : String
   patch : PreparedManifest
@@ -28,7 +48,205 @@ priv struct PendingWrite {
 }
 
 ///|
-// Resolve relative paths against the check's cwd, even if the host changes cwd later.
+fn validate_target_upgrade(change : DependencyChange, target : String) -> Bool {
+  if change.status != UpdateAvailable {
+    return false
+  }
+  match change.dependency.source {
+    GitHubActions => {
+      if change.diff == Some(Pin) && change.target == Some(target) {
+        return true
+      }
+      if !change.candidates.contains(target) && change.target != Some(target) {
+        return false
+      }
+      match
+        (parse_action_tag(change.dependency.version), parse_action_tag(target)) {
+        (Some(curr), Some(next)) =>
+          compare_action_tag(next, { ..curr, prerelease: false, }) > 0
+        _ => false
+      }
+    }
+    _ => {
+      if !change.candidates.contains(target) {
+        return false
+      }
+      let curr = parse_version(change.dependency.version) catch {
+        _ => return false
+      }
+      let next = parse_version(target) catch { _ => return false }
+      SemVer::compare(next, curr) > 0
+    }
+  }
+}
+
+///|
+fn prepare_patches(
+  plan : CheckPlan,
+  selection : Selection,
+) -> Array[PreparedManifest] raise {
+  if plan.has_errors() {
+    write_error("check_failed", "a plan with errors cannot be applied")
+  }
+  if !physical_equal(plan.identity, selection.identity) {
+    write_error(
+      "invalid_selection", "selection belongs to a different check plan",
+    )
+  }
+  // Map `(manifest_path, dep_name)` -> `(target_version, target_sha)`.
+  // GitHub Actions workflows may repeat the same action across multiple steps,
+  // so duplicate identical `(path, name, target)` tuples from recommended_selection
+  // are deduplicated for GitHubActions manifests while MoonMod rejects duplicates.
+  let selected : Map[(String, String), (String, String?)] = Map([])
+  let mut matched_selection_keys = 0
+  for item in selection.items {
+    let (path, name, target) = item
+    let key = (path, name)
+    let matching_changes = plan.entries.filter(c => {
+      c.dependency.manifest == path && c.dependency.name == name
+    })
+    if matching_changes.is_empty() {
+      write_error(
+        "invalid_selection",
+        "dependency does not belong to this plan: \{name}",
+      )
+    }
+    let is_gha = matching_changes[0].dependency.source == GitHubActions
+    match selected.get(key) {
+      Some((prev_target, _)) =>
+        if !is_gha || prev_target != target {
+          write_error(
+            "invalid_selection",
+            "duplicate dependency selection: \{name}",
+          )
+        } else {
+          continue
+        }
+      None => ()
+    }
+    let eligible = matching_changes
+      .iter()
+      .find_first(c => validate_target_upgrade(c, target))
+    guard eligible is Some(change) else {
+      write_error(
+        "invalid_selection",
+        "target is not a newer eligible candidate: \{name}@\{target}",
+      )
+      continue
+    }
+    selected[key] = (target, change.target_sha)
+  }
+  let prepared : Array[PreparedManifest] = []
+  for snapshot in plan.snapshots {
+    let matching_deps = snapshot.dependencies.filter(d => {
+      selected.contains((d.manifest, d.name))
+    })
+    if matching_deps.is_empty() {
+      continue
+    }
+    match snapshot.kind {
+      MoonMod => {
+        let updates : Array[(String, String)] = []
+        let mut previous_end = 0
+        matching_deps.sort_by((a, b) => a.span.start.compare(b.span.start))
+        for dep in matching_deps {
+          let span = dep.span
+          if span.start < previous_end ||
+            span.start < 0 ||
+            span.end <= span.start ||
+            span.end > snapshot.source.length() {
+            write_error(
+              "invalid_selection", "invalid or overlapping version spans",
+            )
+          }
+          if snapshot.source[span.start:span.end] !=
+            @utf8.encode(dep.version)[:] {
+            write_error(
+              "invalid_selection", "version span does not match the checked source",
+            )
+          }
+          previous_end = span.end
+          let (target, _) = selected[(dep.manifest, dep.name)]
+          updates.push((dep.name, target))
+        }
+        let output = patch_moon_manifest(snapshot, updates)
+        let parsed = parse_manifest(
+          output,
+          path=snapshot.path,
+          module_name=snapshot.module_name,
+        )
+        guard parsed.manifest is Some(updated) &&
+          !has_error_diagnostics(parsed.diagnostics) else {
+          write_error("invalid_selection", "patched manifest did not parse")
+          continue
+        }
+        if updated.dependencies.length() != snapshot.dependencies.length() {
+          write_error(
+            "invalid_selection", "patched manifest changed the dependency set",
+          )
+        }
+        for i, dep in snapshot.dependencies {
+          let expected = match selected.get((dep.manifest, dep.name)) {
+            Some((target, _)) => target
+            None => dep.version
+          }
+          let actual = updated.dependencies[i]
+          if actual.name != dep.name ||
+            actual.version != expected ||
+            actual.module_name != dep.module_name {
+            write_error(
+              "invalid_selection", "patched manifest changed an unselected declaration",
+            )
+          }
+        }
+        matched_selection_keys += updates.length()
+        prepared.push({ snapshot, output, count: updates.length(), })
+      }
+      GitHubActions => {
+        let updates : Array[(Dependency, String, String?)] = []
+        let seen_names : Map[String, Unit] = Map([])
+        for dep in matching_deps {
+          let (target, target_sha) = selected[(dep.manifest, dep.name)]
+          let is_pin = plan.gha_style == Sha &&
+            dep.gha is Some(info) &&
+            info.style == Tag
+          if dep.version != target || is_pin {
+            updates.push((dep, target, target_sha))
+            seen_names[dep.name] = ()
+          }
+        }
+        let (output, count) = patch_gha_manifest(
+          snapshot,
+          updates,
+          plan.gha_style,
+        )
+        if count > 0 {
+          let parsed = parse_github_actions_manifest(output, path=snapshot.path)
+          guard parsed.manifest is Some(updated) &&
+            !has_error_diagnostics(parsed.diagnostics) else {
+            write_error(
+              "invalid_selection", "patched workflow file did not parse",
+            )
+            continue
+          }
+          if updated.dependencies.length() != snapshot.dependencies.length() {
+            write_error(
+              "invalid_selection", "patched workflow changed the action reference count",
+            )
+          }
+          matched_selection_keys += seen_names.length()
+          prepared.push({ snapshot, output, count, })
+        }
+      }
+    }
+  }
+  if matched_selection_keys != selected.length() {
+    write_error("invalid_selection", "selection has no unique source snapshot")
+  }
+  prepared
+}
+
+///|
 fn checked_path(path : String, cwd : String) -> String raise {
   if path.length() >= 2 && path[1] == ':' {
     if path.length() < 3 || (path[2] != '/' && path[2] != '\\') {
@@ -62,12 +280,10 @@ async fn verify_snapshots(
   snapshots : Array[(String, Bytes)],
   services : WriteServices,
 ) -> Unit {
-  for (path, expected) in snapshots {
+  for entry in snapshots {
+    let (path, expected) = entry
     let actual = (services.read)(path) catch {
-      error => {
-        if @async.is_cancellation_error(error) {
-          raise error
-        }
+      _ => {
         write_error(
           "stale_plan",
           "cannot reread checked manifest: \{path}",
@@ -102,21 +318,14 @@ async fn apply_with_services(
   let mut failed = false
   try {
     let patches = prepare_patches(plan, selection)
-    match callbacks {
-      Some(callbacks) =>
-        match callbacks.before_apply {
-          Some(callback) => {
-            let message = callback(selection)
-            if message != "" {
-              write_error("callback_denied", message)
-            }
-          }
-          None => ()
-        }
-      None => ()
+    if callbacks is Some(callbacks) && callbacks.before_apply is Some(callback) {
+      let message = callback(selection)
+      if message != "" {
+        write_error("callback_denied", message)
+      }
     }
     if patches.is_empty() {
-      let report = {
+      let report : ApplyReport = {
         status: Succeeded,
         files: plan.snapshots.map(snapshot => {
           manifest: snapshot.path,
@@ -143,7 +352,6 @@ async fn apply_with_services(
     for i, snapshot in plan.snapshots {
       active = Some(snapshot.path)
       let input_path = checked_path(snapshot.path, plan.cwd)
-      // Inspect the original leaf before realpath can follow a symlink.
       if patches.any(p => p.snapshot.path == snapshot.path) {
         (services.inspect)(input_path)
       }
@@ -158,13 +366,12 @@ async fn apply_with_services(
       }
       seen[path] = ()
       snapshots.push((path, snapshot.source))
-      match patches.iter().find_first(p => p.snapshot.path == snapshot.path) {
-        Some(patch) => pending.push({ path, patch, temporary: None, })
-        None => ()
+      if patches.iter().find_first(p => p.snapshot.path == snapshot.path)
+        is Some(patch) {
+        pending.push({ path, patch, temporary: None, })
       }
     }
     pending.sort_by((a, b) => a.path.compare(b.path))
-    // Every ownership acquisition is shielded through registration for cleanup.
     for item in pending {
       active = Some(item.path)
       if (services.cancelled)() {
@@ -176,7 +383,7 @@ async fn apply_with_services(
         owned.push(lock)
         (services.write_lock)(
           lock,
-          @utf8.encode("moon-taze-p1b " + services.run_id + "\n"),
+          @utf8.encode("moon-taze " + services.run_id + "\n"),
         )
       })
     }
@@ -210,7 +417,6 @@ async fn apply_with_services(
         }
         (services.inspect)(item.path)
         verify_snapshots([(item.path, item.patch.snapshot.source)], services)
-        // Commit and its accounting are one cancellation-protected operation.
         @async.protect_from_cancel(() => {
           (services.replace)(item.temporary.unwrap(), item.path)
           for i, file in files {
@@ -223,61 +429,49 @@ async fn apply_with_services(
             }
           }
         })
-        match callbacks {
-          Some(callbacks) =>
-            match callbacks.file_applied {
-              Some(callback) =>
-                match
-                  files.iter().find_first(file => file.manifest == item.path) {
-                  Some(file) => {
-                    let message = callback(file)
-                    if message != "" {
-                      write_error("callback_failed", message)
-                    }
-                  }
-                  None => ()
-                }
-              None => ()
+        if callbacks is Some(callbacks) &&
+          callbacks.file_applied is Some(callback) {
+          if files.iter().find_first(file => file.manifest == item.path)
+            is Some(file) {
+            let message = callback(file)
+            if message != "" {
+              write_error("callback_failed", message)
             }
-          None => ()
+          }
         }
       }
     }
   } catch {
-    error =>
-      if @async.is_cancellation_error(error) {
-        was_cancelled = true
-      } else {
-        failed = true
-        let (code, message, path) = match error {
-          WriteError(code, message, path) => (code, message, path)
-          _ => ("write_failed", error.to_string(), None)
-        }
-        if path is Some(_) {
-          active = path
-        }
-        diagnostics.push(diagnostic(code, message, active, None, None, None))
-        if active is Some(path) {
-          let mut recorded = false
-          for i, file in files {
-            if file.manifest == path {
-              recorded = true
-              if file.status != Written {
-                files[i] = { ..file, status: Failed, }
-              }
+    error => {
+      failed = true
+      let (code, message, path) = match error {
+        WriteError(code, message, path) => (code, message, path)
+        _ => ("write_failed", error.to_string(), None)
+      }
+      if path is Some(_) {
+        active = path
+      }
+      diagnostics.push(diagnostic(code, message, active, None, None, None))
+      if active is Some(path) {
+        let mut recorded = false
+        for i, file in files {
+          if file.manifest == path {
+            recorded = true
+            if file.status != Written {
+              files[i] = { ..file, status: Failed, }
             }
           }
-          if !recorded {
-            files.push({
-              manifest: path,
-              status: Failed,
-              changed_dependencies: 0,
-            })
-          }
+        }
+        if !recorded {
+          files.push({
+            manifest: path,
+            status: Failed,
+            changed_dependencies: 0,
+          })
         }
       }
+    }
   }
-  // Cleanup must run even when the parent task is already cancelled.
   @async.protect_from_cancel(() => {
     for i = owned.length() - 1; i >= 0; i = i - 1 {
       (services.cleanup)(owned[i]) catch {
@@ -299,7 +493,7 @@ async fn apply_with_services(
   })
   was_cancelled = was_cancelled || (services.cancelled)()
   let written = files.any(f => f.status == Written)
-  let status = if failed || was_cancelled {
+  let status : ApplyStatus = if failed || was_cancelled {
     if written {
       Partial
     } else if failed {
@@ -331,10 +525,10 @@ fn dispatch_after_run(
             diagnostics.push(
               diagnostic("callback_failed", message, None, None, None, None),
             )
-            let status = if report.written_files() > 0 {
-              ApplyStatus::Partial
+            let status : ApplyStatus = if report.written_files() > 0 {
+              Partial
             } else {
-              ApplyStatus::Failed
+              Failed
             }
             { ..report, status, diagnostics, }
           }
@@ -346,9 +540,8 @@ fn dispatch_after_run(
 }
 
 ///|
-/// Apply a live plan using the Native writer. Failures retain all commit results.
+/// Apply a live plan using the atomic Native writer.
 ///
-/// An empty valid selection succeeds without filesystem writes:
 /// ```mbt check
 /// async test {
 ///   let manifest = @moon-taze.parse_manifest(
@@ -356,7 +549,7 @@ fn dispatch_after_run(
 ///     path="moon.mod",
 ///     module_name="demo/app",
 ///   ).manifest.unwrap()
-///   let plan = @moon-taze.check_manifest(manifest, mode=Patch, fetch=name => {
+///   let plan = @moon-taze.check(manifest, fetch=name => {
 ///     @moon-taze.ModuleMetadata(name, None, [])
 ///   })
 ///   let report = @moon-taze.apply(plan, plan.recommended_selection())
@@ -367,7 +560,7 @@ fn dispatch_after_run(
 pub async fn apply(
   plan : CheckPlan,
   selection : Selection,
-  callbacks? : Callbacks? = None,
+  callbacks~ : Callbacks? = None,
 ) -> ApplyReport {
   apply_with_services(plan, selection, native_write_services(), callbacks)
 }

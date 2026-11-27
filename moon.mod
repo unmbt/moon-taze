@@ -1,37 +1,23 @@
 // Learn more about moon.mod configuration:
 // https://docs.moonbitlang.com/en/latest/toolchain/moon/module.html
-//
-// To add a dependency, run this command in your terminal:
-//   moon add moonbitlang/x
-//
-// Or manually declare it in `import`, for example:
-// import {
-//   "moonbitlang/x@0.4.6",
-// }
 
 name = "unmbt/moon-taze"
 
 version = "0.1.1"
 
-readme = "README.md"
+readme = "README.mbt.md"
 
 repository = "https://github.com/unmbt/moon-taze"
 
 license = "MIT"
 
-keywords = [ "cli", "dependency", "moonbit", "mooncakes" ]
+keywords = [ "cli", "dependency", "moonbit", "mooncakes", "github-actions" ]
 
 preferred_target = "native"
 
-description = "A reliable interactive dependency update tool for MoonBit projects."
+description = "A reliable dependency update tool for MoonBit projects and GitHub Actions."
 
 import {
-  "moonbitlang/async@0.22.5",
-  "unmbt/moon-manifest@0.1.0",
-  "unmbt/native-toolchain@0.1.0",
-  "mizchi/tui@0.10.2",
-  "mizchi/tui-terminal-buffer@0.1.4",
-  "mizchi/crater-core@0.19.0",
-  "mizchi/crater-layout@0.19.1",
-  "mizchi/css@0.7.4",
+  "unmbt/moon-manifest@0.3.0",
+  "unmbt/cac@0.1.1",
 }

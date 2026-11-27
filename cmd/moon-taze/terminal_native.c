@@ -17,6 +17,14 @@ MOONBIT_FFI_EXPORT int32_t moon_taze_stdin_isatty(void) {
 #endif
 }
 
+MOONBIT_FFI_EXPORT int32_t moon_taze_stdout_isatty(void) {
+#ifdef _WIN32
+  return _isatty(_fileno(stdout)) != 0;
+#else
+  return isatty(STDOUT_FILENO) != 0;
+#endif
+}
+
 MOONBIT_FFI_EXPORT uint32_t moon_taze_get_console_output_cp(void) {
 #ifdef _WIN32
   return (uint32_t)GetConsoleOutputCP();

@@ -30,6 +30,11 @@ jobs:
 
       - name: Setup MoonBit
         uses: hustcer/setup-moonbit@v1
+        with:
+          version: '1.0.0-rc1+3c0520448'
+          core-version: '1.0.0-rc1+3c0520448'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update Registry & Dependencies
         run: moon update
@@ -75,6 +80,11 @@ jobs:
 
       - name: Setup MoonBit
         uses: hustcer/setup-moonbit@v1
+        with:
+          version: '1.0.0-rc1+3c0520448'
+          core-version: '1.0.0-rc1+3c0520448'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update Registry & Dependencies
         run: moon update

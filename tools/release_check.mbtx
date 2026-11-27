@@ -1,53 +1,53 @@
+----
 import {
-  "moonbitlang/async@0.22.5",
-  "moonbitlang/async@0.22.5/process",
+  "moonbitlang/core/async",
+  "moonbitlang/core/async/process",
   "moonbitlang/core/env",
 }
+----
 
+///|
 async fn run_step(
   root : String,
   label : String,
   command : String,
   arguments : Array[String],
 ) -> Unit {
-  let (code, stdout, stderr) = @process.collect_output(
+  let result = @process.run(
     command,
     arguments,
     inherit_env=true,
     cwd=root,
+    stdout=Collect,
+    stderr=Collect,
+    accepted_exit_code=_ => true,
   )
+  let code = result.exit_code
   println("[\{label}] exit=\{code}")
   if code != 0 {
-    let out = stdout.text()
-    let err = stderr.text()
     fail(
-      "P4 step failed: \{label}\nstdout:\n\{out}\nstderr:\n\{err}",
+      "Release check step failed: \{label}\nstdout:\n\{result.stdout_text()}\nstderr:\n\{result.stderr_text()}",
     )
   }
 }
 
-async fn main raise {
+///|
+async fn main {
   let root = @env.current_dir().unwrap_or(".")
   let args = @env.args()
   let online = args.any(value => value == "--online")
-  println("P4 Native release validation")
+  println("Native release validation")
   run_step(root, "moon-version", "moon", ["version"])
   run_step(root, "moon-build-native", "moon", ["build", "--target", "native"])
   run_step(root, "moon-check-native", "moon", ["check", "--target", "native"])
   run_step(root, "moon-test-native", "moon", ["test", "--target", "native"])
-  run_step(
-    root,
-    "cli-smoke",
-    "moon",
-    ["run", "--target", "native", "tools/cli_smoke.mbtx"],
-  )
+  run_step(root, "cli-smoke", "moon", [
+    "run", "--target", "native", "tools/cli_smoke.mbtx",
+  ])
   if online {
-    run_step(
-      root,
-      "native-online-probe",
-      "moon",
-      ["run", "--target", "native", "tools/native_probe.mbtx"],
-    )
+    run_step(root, "native-online-probe", "moon", [
+      "run", "--target", "native", "tools/native_probe.mbtx",
+    ])
   }
-  println("P4 Native release validation: passed")
+  println("Native release validation: passed")
 }

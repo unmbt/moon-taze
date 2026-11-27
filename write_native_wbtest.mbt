@@ -1,50 +1,46 @@
 ///|
-async test "Native preserves Windows ACL and rejects readonly files" {
+async test "native preserves Windows ACL and rejects readonly files" {
   if @env.get_env_var("OS") != Some("Windows_NT") {
     return
   }
   let root = @fs.tmpdir(prefix="moon-taze-acl")
-  defer @fs.rmdir(root, recursive=true)
+  defer @fs.remove(root, recursive=true)
   let plan = batch_fixture(root, 1)
   let path = @fs.realpath(plan.snapshots[0].path)
-  let (user_code, user, _) = @process.collect_output(
-    "whoami.exe",
-    [],
-    inherit_env=true,
+  let user = @process.run("whoami.exe", [], inherit_env=true, stdout=Collect)
+  let account = user.stdout_text().trim().to_owned()
+  ignore(
+    @process.run(
+      "icacls.exe",
+      [path, "/inheritance:r", "/grant:r", account + ":(F)"],
+      inherit_env=true,
+    ),
   )
-  assert_eq(user_code, 0)
-  let account = user.text().trim().to_owned()
-  let (acl_code, _, _) = @process.collect_output(
-    "icacls.exe",
-    [path, "/inheritance:r", "/grant:r", account + ":(F)"],
-    inherit_env=true,
-  )
-  assert_eq(acl_code, 0)
-  let (before_code, before, _) = @process.collect_output(
+  let before = @process.run(
     "icacls.exe",
     [path],
     inherit_env=true,
+    stdout=Collect,
   )
-  assert_eq(before_code, 0)
   let result = apply(plan, plan.recommended_selection())
   assert_eq(result.exit_code(), 0)
-  let (after_code, after, _) = @process.collect_output(
+  let after = @process.run(
     "icacls.exe",
     [path],
     inherit_env=true,
+    stdout=Collect,
   )
-  assert_eq(after_code, 0)
-  assert_eq(after.binary(), before.binary())
+  assert_eq(after.stdout_binary(), before.stdout_binary())
+
   let fresh = batch_fixture(root, 1)
-  let (code, _, _) = @process.collect_output(
-    "attrib.exe",
-    ["+R", path],
-    inherit_env=true,
-  )
-  assert_eq(code, 0)
-  defer ignore(
-    @process.collect_output("attrib.exe", ["-R", path], inherit_env=true),
-  )
+  ignore(@process.run("attrib.exe", ["+R", path], inherit_env=true))
+  defer @async.protect_from_cancel(() => {
+    ignore(
+      @process.run("attrib.exe", ["-R", path], inherit_env=true) catch {
+        _ => return
+      },
+    )
+  })
   let denied = apply(fresh, fresh.recommended_selection())
   assert_eq(denied.exit_code(), 2)
   assert_eq(denied.written_files(), 0)
@@ -54,19 +50,19 @@ async test "Native preserves Windows ACL and rejects readonly files" {
 
 ///|
 #skip("requires file-symlink privilege on Windows; run explicitly with --include-skipped")
-async test "Native rejects symlink leaf without following it for a write" {
+async test "native rejects symlink leaf without following it for a write" {
   let root = @fs.tmpdir(prefix="moon-taze-symlink")
-  defer @fs.rmdir(root, recursive=true)
+  defer @fs.remove(root, recursive=true)
   let plan = batch_fixture(root, 1)
   let target = plan.snapshots[0].path
   let link_path = root + "/moon.mod"
   @fs.symlink(link_path, target~, force_symlink=true)
   let manifest = parse_manifest(
-    @fs.read_file(link_path).binary(),
+    @fs.read_binary(link_path),
     path=link_path,
     module_name="demo/app",
   ).manifest.unwrap()
-  let linked = check_manifest(manifest, mode=Patch, fetch=name => {
+  let linked = check(manifest, options=CheckOptions(mode=Patch), fetch=name => {
     ModuleMetadata(name, Some("1.0.12"), [
       VersionMetadata("1.0.12", false, None, None),
     ])
@@ -79,9 +75,9 @@ async test "Native rejects symlink leaf without following it for a write" {
 }
 
 ///|
-async test "Native simultaneous writer encounters lock while first writer commits" {
+async test "native simultaneous writer encounters lock while first writer commits" {
   let root = @fs.tmpdir(prefix="moon-taze-concurrent")
-  defer @fs.rmdir(root, recursive=true)
+  defer @fs.remove(root, recursive=true)
   let plan = batch_fixture(root, 1)
   let ready = @async.Mutex()
   let proceed = @async.Mutex()
@@ -95,38 +91,41 @@ async test "Native simultaneous writer encounters lock while first writer commit
       proceed.release()
     },
   }
-  let (first, second) = @async.with_task_group(group => {
+  let mut first : ApplyReport? = None
+  let mut second : ApplyReport? = None
+  @async.with_task_group(group => {
     let task = group.spawn(() => {
       apply_with_services(plan, plan.recommended_selection(), first_io, None)
     })
     @async.with_timeout(5000, () => ready.acquire())
     ready.release()
-    let second = apply(plan, plan.recommended_selection())
+    second = Some(apply(plan, plan.recommended_selection()))
     proceed.release()
-    (task.wait(), second)
+    first = Some(task.wait())
   })
-  assert_true(first.status is Succeeded)
+  let first = first.unwrap()
+  let second = second.unwrap()
+  assert_eq(first.status, Succeeded)
   assert_eq(first.written_files(), 1)
-  assert_true(second.status is Failed)
+  assert_eq(second.status, Failed)
   assert_eq(second.diagnostics[0].code, "write_conflict")
   assert_eq(@fs.readdir(root, include_hidden=true).length(), 1)
 }
 
 ///|
-async test "Native cleanup never removes replacement resources owned by another run" {
+async test "native cleanup never removes replacement resources owned by another run" {
   let root = @fs.tmpdir(prefix="moon-taze-ownership")
-  defer @fs.rmdir(root, recursive=true)
+  defer @fs.remove(root, recursive=true)
   let native = native_write_services()
   let path = root + "/moon.mod.moon-taze.lock"
   let owned = (native.create)(path)
-  // Keep the original inode alive at another path to exclude immediate id reuse.
   @fs.rename(path, root + "/old.lock", replace=false)
-  @fs.write_file(path, b"other process")
+  @fs.write_binary(path, b"other process")
   try (native.cleanup)(owned) catch {
     WriteError(code, _, _) => assert_eq(code, "write_conflict")
     error => raise error
   } noraise {
     _ => fail("expected ownership conflict")
   }
-  assert_eq(@fs.read_file(path).binary(), b"other process")
+  assert_eq(@fs.read_binary(path), b"other process")
 }

@@ -7,33 +7,47 @@ import {
 }
 
 // Values
+pub fn action_diff_kind(String, String) -> DiffKind?
+
 pub async fn apply(CheckPlan, Selection, callbacks? : Callbacks?) -> ApplyReport
 
-pub async fn check(Manifest, mode? : UpdateMode, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
+pub async fn check(Manifest, options? : CheckOptions, fetch? : async (String) -> ModuleMetadata raise RegistryError, fetch_gha? : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
 
-pub async fn check_manifest(Manifest, mode~ : UpdateMode, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
+pub async fn check_manifests(Array[Manifest], options? : CheckOptions, fetch? : async (String) -> ModuleMetadata raise RegistryError, fetch_gha? : async (String) -> ModuleMetadata raise RegistryError) -> CheckPlan
 
-pub async fn check_manifest_filtered(Manifest, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
-
-pub async fn check_manifest_timed(Manifest, mode~ : UpdateMode, options~ : ReleaseOptions, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
-
-pub async fn check_manifest_timed_filtered(Manifest, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], options~ : ReleaseOptions, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
-
-pub async fn check_manifests_filtered(Array[Manifest], Array[String], mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], cwd? : String, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
-
-pub async fn check_manifests_timed_filtered(Array[Manifest], Array[String], mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String], options~ : ReleaseOptions, cwd? : String, fetch~ : async (String) -> ModuleMetadata raise RegistryError, callbacks? : Callbacks?) -> CheckPlan
-
-pub async fn check_path(String, module_name~ : String, mode~ : UpdateMode) -> CheckPlan
-
-pub async fn check_path_filtered(String, module_name~ : String, mode~ : UpdateMode, include~ : Array[String], exclude~ : Array[String]) -> CheckPlan
+pub async fn check_path(String, module_name? : String, options? : CheckOptions) -> CheckPlan
 
 pub fn choose_version(String, Array[String], mode~ : UpdateMode) -> String? raise SemVerError
 
+pub fn format_release_age(Int64?, now? : Int64) -> String
+
+pub fn format_time_diff(Int64?, Int64?) -> String
+
+pub fn format_uses(String, String, String) -> String
+
+pub fn is_github_actions_path(String) -> Bool
+
+pub fn is_retryable_registry_error(RegistryError) -> Bool
+
 pub fn module_name_from_source(Bytes) -> String
+
+pub fn parse_action_tag(String) -> ParsedActionTag?
+
+pub fn parse_gha_style(String) -> GitHubActionStyle?
+
+pub fn parse_github_actions_manifest(Bytes, path~ : String) -> ParseResult
 
 pub fn parse_manifest(Bytes, path~ : String, module_name~ : String) -> ParseResult
 
+pub fn parse_rfc3339_ms(String) -> Int64?
+
+pub fn parse_uses(String, comment? : String?) -> ParsedUses?
+
 pub fn parse_version(String) -> SemVer raise SemVerError
+
+pub async fn query_github_commit_date(String, String, api_root? : String, timeout_ms? : Int32) -> Int64? raise RegistryError
+
+pub async fn query_github_tags(String, api_root? : String, timeout_ms? : Int32) -> ModuleMetadata raise RegistryError
 
 pub async fn query_mooncakes(root~ : String, String) -> ModuleMetadata raise RegistryError
 
@@ -49,24 +63,33 @@ pub fn registry_request_failed(String) -> RegistryError
 
 pub fn resolve(Dependency, ModuleMetadata, Policy, now~ : Int64) -> DependencyChange raise ResolveError
 
+pub async fn[T] retry_registry(retries~ : Int32, delay_ms~ : Int32, async () -> T raise RegistryError) -> T raise RegistryError
+
+pub fn select_action_target(String, Array[String], UpdateMode, reject? : (ParsedActionTag) -> Bool) -> SelectedActionTarget?
+
 pub fn select_version(SemVer, Array[SemVer], latest? : SemVer, mode~ : UpdateMode) -> SemVer?
 
 pub fn selector_valid(String) -> Bool
+
+pub fn valid_gha_metadata(ModuleMetadata, String) -> Bool
 
 pub fn valid_metadata(ModuleMetadata, String) -> Bool
 
 pub fn warning_diagnostic(String, String, String?, String?, Int32?, Int32?) -> Diagnostic
 
 // Errors
+#derive(@debug.Debug)
 pub suberror RegistryError {
   RequestFailed(String)
   InvalidMetadata(String)
-} derive(@debug.Debug)
+}
 
+#derive(@debug.Debug)
 pub suberror ResolveError {
   InvalidMetadata(String)
 }
 
+#derive(@debug.Debug)
 pub suberror SemVerError {
   InvalidVersion(String)
 }
@@ -83,12 +106,13 @@ pub fn ApplyReport::files(Self) -> Array[FileApplyResult]
 pub fn ApplyReport::status(Self) -> ApplyStatus
 pub fn ApplyReport::written_files(Self) -> Int32
 
+#derive(Eq, @debug.Debug)
 pub(all) enum ApplyStatus {
   Succeeded
   Failed
   Partial
   Cancelled
-} derive(Eq, @debug.Debug)
+}
 
 pub struct Callbacks {
   after_discovery : ((CheckPlan) -> String)?
@@ -99,13 +123,26 @@ pub struct Callbacks {
 }
 pub fn Callbacks::Callbacks(after_discovery? : ((CheckPlan) -> String)?, dependency_resolved? : ((DependencyChange) -> String)?, before_apply? : ((Selection) -> String)?, file_applied? : ((FileApplyResult) -> String)?, after_run? : ((ApplyReport) -> String)?) -> Self
 
-pub enum ChangeStatus {
+#derive(Eq, @debug.Debug)
+pub(all) enum ChangeStatus {
   UpdateAvailable
   UpToDate
   NoCandidate
   Skipped
   Error
-} derive(Eq, @debug.Debug)
+}
+
+pub struct CheckOptions {
+  mode : UpdateMode
+  include_selectors : Array[String]
+  exclude_selectors : Array[String]
+  local_modules : Array[String]
+  release : ReleaseOptions
+  gha_style : GitHubActionStyle
+  cwd : String
+  callbacks : Callbacks?
+}
+pub fn CheckOptions::CheckOptions(mode? : UpdateMode, include_selectors? : Array[String], exclude_selectors? : Array[String], local_modules? : Array[String], release? : ReleaseOptions, gha_style? : GitHubActionStyle, cwd? : String, callbacks? : Callbacks?) -> Self
 
 pub struct CheckPlan {
   // private fields
@@ -121,11 +158,12 @@ pub struct Clock {
 }
 pub fn Clock::Clock(() -> Int64) -> Self
 
+#derive(Eq, @debug.Debug)
 pub struct Config {
   mode : String?
   recursive : Bool?
   all : Bool?
-  include : Array[String]?
+  include_selectors : Array[String]?
   exclude : Array[String]?
   ignoreOtherWorkspaces : Bool?
   retry : Int32?
@@ -134,39 +172,51 @@ pub struct Config {
   timediff : Bool?
   maturityPeriod : Int32?
   maturityPeriodExclude : Array[String]?
-} derive(Eq, @debug.Debug, @json.FromJson)
+  githubActions : @json.Json?
+  githubActionsStyle : String?
+}
+pub fn Config::resolve_github_actions(Self) -> (Bool?, GitHubActionStyle?) raise
 
+#derive(Eq, @debug.Debug)
 pub struct ConfigResult {
   config : Config?
   diagnostics : Array[Diagnostic]
-} derive(Eq, @debug.Debug)
+}
 
+#derive(Eq, @debug.Debug)
 pub struct Dependency {
-  module : String
+  module_name : String
   manifest : String
   name : String
   version : String
   source : DependencySource
   span : SourceSpan
-} derive(Eq, @debug.Debug)
+  gha : GitHubActionRef?
+}
 
+#derive(Eq, @debug.Debug)
 pub struct DependencyChange {
   dependency : Dependency
   mode : UpdateMode
   status : ChangeStatus
   target : String?
+  target_sha : String?
+  latest_available : String?
   candidates : Array[String]
   diff : DiffKind?
   reason : String?
   diagnostics : Array[Diagnostic]
-} derive(Eq, @debug.Debug)
+}
 
-pub enum DependencySource {
-  Registry
+#derive(Eq, @debug.Debug)
+pub(all) enum DependencySource {
+  Mooncakes
+  GitHubActions
   LocalWorkspace
   Unsupported
-} derive(Eq, @debug.Debug)
+}
 
+#derive(Eq, @debug.Debug)
 pub struct Diagnostic {
   severity : DiagnosticSeverity
   code : String
@@ -175,20 +225,24 @@ pub struct Diagnostic {
   dependency : String?
   line : Int32?
   column : Int32?
-} derive(Eq, @debug.Debug)
+}
 
-pub enum DiagnosticSeverity {
+#derive(Eq, @debug.Debug)
+pub(all) enum DiagnosticSeverity {
   Warning
   Error
-} derive(Eq, @debug.Debug)
+}
 
-pub enum DiffKind {
+#derive(Eq, @debug.Debug)
+pub(all) enum DiffKind {
   Major
   Minor
   Patch
   Prerelease
-} derive(Eq, @debug.Debug)
+  Pin
+}
 
+#derive(Eq, @debug.Debug)
 pub struct FileApplyResult {
   manifest : String
   status : FileApplyStatus
@@ -198,75 +252,129 @@ pub fn FileApplyResult::changed_dependencies(Self) -> Int32
 pub fn FileApplyResult::manifest(Self) -> String
 pub fn FileApplyResult::status(Self) -> FileApplyStatus
 
+#derive(Eq, @debug.Debug)
 pub(all) enum FileApplyStatus {
   Written
   Unchanged
   Failed
   NotAttempted
-} derive(Eq, @debug.Debug)
+}
 
+#derive(Eq, @debug.Debug)
+pub struct GitHubActionRef {
+  repo : String
+  subpath : String
+  style : GitHubActionStyle
+  sha : String?
+  value_span : SourceSpan
+  quote : Char?
+  comment_span : SourceSpan?
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) enum GitHubActionStyle {
+  Auto
+  Tag
+  Sha
+}
+
+#derive(Eq, @debug.Debug)
 pub struct Manifest {
+  kind : ManifestKind
   module_name : String
   path : String
   source : Bytes
   dependencies : Array[Dependency]
-} derive(Eq, @debug.Debug)
+}
 
+#derive(Eq, @debug.Debug)
+pub(all) enum ManifestKind {
+  MoonMod
+  GitHubActions
+}
+
+#derive(Eq, @debug.Debug)
 pub struct ModuleMetadata {
-  module : String
+  module_name : String
   latest : String?
   versions : Array[VersionMetadata]
-} derive(Eq, @debug.Debug)
+}
 pub fn ModuleMetadata::ModuleMetadata(String, String?, Array[VersionMetadata]) -> Self
 
+#derive(Eq, @debug.Debug)
 pub struct ParseResult {
   manifest : Manifest?
   diagnostics : Array[Diagnostic]
-} derive(Eq, @debug.Debug)
+}
 
+#derive(Eq, @debug.Debug)
+pub struct ParsedActionTag {
+  raw : String
+  major : Int32
+  minor : Int32
+  patch : Int32
+  segments : Int32
+  prerelease : Bool
+}
+
+#derive(Eq, @debug.Debug)
+pub struct ParsedUses {
+  repo : String
+  subpath : String
+  tag : String
+  style : GitHubActionStyle
+  sha : String?
+}
+
+#derive(Eq, @debug.Debug)
 pub struct Policy {
   mode : UpdateMode
   exclude : Array[String]
   maturity_days : Int32
   maturity_exclude : Array[String]
-} derive(Eq, @debug.Debug)
-pub fn Policy::Policy(UpdateMode, exclude? : Array[String], maturity_days? : Int32, maturity_exclude? : Array[String]) -> Self
+  gha_style : GitHubActionStyle
+}
+pub fn Policy::Policy(UpdateMode, exclude? : Array[String], maturity_days? : Int32, maturity_exclude? : Array[String], gha_style? : GitHubActionStyle) -> Self
 
-type RegistryDetail derive(@debug.Debug, @json.FromJson)
-
-type RegistryOverview derive(@debug.Debug, @json.FromJson)
-
-type RegistryVersion derive(@debug.Debug, @json.FromJson)
-
+#derive(Eq, @debug.Debug)
 pub struct ReleaseOptions {
   now_ms : Int64
   maturity_days : Int32
   maturity_exclude : Array[String]
-} derive(Eq, @debug.Debug)
+}
 pub fn ReleaseOptions::ReleaseOptions(Int64, Int32, maturity_exclude? : Array[String]) -> Self
+
+#derive(Eq, @debug.Debug)
+pub struct SelectedActionTarget {
+  tag : String
+  resolved_tag : String
+}
 
 pub struct Selection {
   // private fields
 }
 pub fn Selection::items(Self) -> Array[(String, String, String)]
 
+#derive(Eq, @debug.Debug)
 pub struct SemVer {
   major : Int32
   minor : Int32
   patch : Int32
   prerelease : Array[String]
   build : Array[String]
-} derive(Eq, @debug.Debug)
+}
 pub fn SemVer::compare(Self, Self) -> Int32
 pub fn SemVer::to_string(Self) -> String
 
-pub struct SourceSpan {
+#derive(Eq, @debug.Debug)
+pub(all) struct SourceSpan {
   start : Int32
   end : Int32
   line : Int32
   column : Int32
-} derive(Eq, @debug.Debug)
+}
 
+#derive(Eq, @debug.Debug)
 pub(all) enum UpdateMode {
   Default
   Major
@@ -276,33 +384,38 @@ pub(all) enum UpdateMode {
   Stable
   Newest
   Next
-} derive(Eq, @debug.Debug)
+}
 
+#derive(Eq, @debug.Debug)
 pub struct VersionMetadata {
   version : String
   yanked : Bool
   yanked_reason : String?
   published_at : Int64?
-} derive(Eq, @debug.Debug)
-pub fn VersionMetadata::VersionMetadata(String, Bool, String?, Int64?) -> Self
+  sha : String?
+}
+pub fn VersionMetadata::VersionMetadata(String, Bool, String?, Int64?, sha? : String?) -> Self
 
+#derive(Eq, @debug.Debug)
 pub struct Workspace {
   root : String
   path : String
   source : Bytes
   members : Array[WorkspaceMember]
-} derive(Eq, @debug.Debug)
+}
 
+#derive(Eq, @debug.Debug)
 pub struct WorkspaceMember {
   directory : String
   manifest : Manifest
   module_name : String
-} derive(Eq, @debug.Debug)
+}
 
+#derive(Eq, @debug.Debug)
 pub struct WorkspaceParseResult {
   workspace : Workspace?
   diagnostics : Array[Diagnostic]
-} derive(Eq, @debug.Debug)
+}
 
 // Type aliases
 

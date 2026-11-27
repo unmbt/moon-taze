@@ -1,15 +1,19 @@
+----
 import {
-  "moonbitlang/async@0.22.5",
-  "moonbitlang/async@0.22.5/fs",
-  "moonbitlang/async@0.22.5/process",
+  "moonbitlang/core/async",
+  "moonbitlang/core/async/fs",
+  "moonbitlang/core/async/process",
   "moonbitlang/core/env",
 }
+----
 
-// Run after moon build --target native; optional first argument is the executable path.
+///|
+// Run after `moon build --target native`; optional first argument is the executable path.
 async fn main {
   let args = @env.args()
   let cwd = @env.current_dir().unwrap()
-  let executable_base = cwd + "/_build/native/debug/build/cmd/moon-taze/moon-taze"
+  let executable_base = cwd +
+    "/_build/native/debug/build/cmd/moon-taze/moon-taze"
   let default_executable = if @env.get_env_var("OS") == Some("Windows_NT") {
     executable_base + ".exe"
   } else if @fs.exists(executable_base) {
@@ -19,29 +23,54 @@ async fn main {
   }
   let executable = args.get(1).unwrap_or(default_executable)
   let root = @fs.tmpdir(prefix="moon-taze-cli-smoke")
-  defer @fs.rmdir(root, recursive=true)
+  defer @fs.remove(root, recursive=true)
   let path = root + "/moon.mod"
   let source = b"name = \"demo/empty\"\r\n// preserve me"
-  @fs.write_file(path, source)
+  @fs.write_binary(path, source)
   @fs.mkdir(root + "/.git")
   let modified = @fs.mtime(path)
-  for (arguments, expected) in [
-    (["--help"], 0),
-    (["--version"], 0),
-    (["-V"], 0),
-    (["patch", "-C", root], 0),
-    (["patch", "-C", root, "-w"], 0),
-    (["--unknown"], 2),
-    (["-C", root, "-w", "--verify"], 0),
-  ] {
-    let (code, stdout, stderr) = @process.collect_output(executable, arguments, inherit_env=true)
-    if code != expected { fail("unexpected exit \{code}: \{stdout.text()} \{stderr.text()}") }
+  for
+    item in [
+      (["--help"], 0),
+      (["--version"], 0),
+      (["-V"], 0),
+      (["patch", "-C", root], 0),
+      (["patch", "-C", root, "-w"], 0),
+      (["--unknown"], 2),
+      (["-I", "-C", root], 2),
+      (["--interactive", "--json", "-C", root], 2),
+      (["-C", root, "-w", "--verify"], 0),
+    ] {
+    let (arguments, expected) = item
+    let result = @process.run(
+      executable,
+      arguments,
+      inherit_env=true,
+      stdout=Collect,
+      stderr=Collect,
+      accepted_exit_code=_ => true,
+    )
+    if result.exit_code != expected {
+      let arg_text = arguments.join(" ")
+      fail(
+        "unexpected exit \{result.exit_code} (expected \{expected}) for \{arg_text}\nstdout:\n\{result.stdout_text()}\nstderr:\n\{result.stderr_text()}",
+      )
+    }
   }
-  assert_eq(@fs.read_file(path).binary(), source)
+  assert_eq(@fs.read_binary(path), source)
   assert_eq(@fs.mtime(path), modified)
-  @fs.write_file(path, b"name = \"demo/empty\"\nimport {\"demo/a@invalid\"}")
-  let (code, _, _) = @process.collect_output(executable, ["-C", root, "-w"], inherit_env=true)
-  assert_eq(code, 2)
+  @fs.write_binary(path, b"name = \"demo/empty\"\nimport {\"demo/a@invalid\"}")
+  let bad = @process.run(
+    executable,
+    ["-C", root, "-w"],
+    inherit_env=true,
+    stdout=Collect,
+    stderr=Collect,
+    accepted_exit_code=_ => true,
+  )
+  assert_eq(bad.exit_code, 2)
   assert_eq(@fs.readdir(root, include_hidden=true).length(), 2)
-  println("CLI process smoke: 7 exit-code cases passed; no network; no project writes")
+  println(
+    "CLI process smoke: 9 exit-code cases passed; no network; no project writes",
+  )
 }

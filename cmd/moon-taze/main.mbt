@@ -1,11 +1,6 @@
 ///|
-fn usage() -> String {
-  cli_command().render_help()
-}
-
-///|
 #cfg(target="native")
-extern "C" fn terminate_process(code : Int) = "exit"
+extern "C" fn terminate_process(code : Int32) = "exit"
 
 ///|
 #cfg(target="native")
@@ -13,11 +8,15 @@ extern "C" fn moon_taze_stdin_isatty() -> Bool = "moon_taze_stdin_isatty"
 
 ///|
 #cfg(target="native")
-extern "C" fn moon_taze_get_console_output_cp() -> UInt = "moon_taze_get_console_output_cp"
+extern "C" fn moon_taze_stdout_isatty() -> Bool = "moon_taze_stdout_isatty"
 
 ///|
 #cfg(target="native")
-extern "C" fn moon_taze_set_console_output_cp(cp : UInt) = "moon_taze_set_console_output_cp"
+extern "C" fn moon_taze_get_console_output_cp() -> UInt32 = "moon_taze_get_console_output_cp"
+
+///|
+#cfg(target="native")
+extern "C" fn moon_taze_set_console_output_cp(cp : UInt32) = "moon_taze_set_console_output_cp"
 
 ///|
 #cfg(target="native")
@@ -27,819 +26,67 @@ fn interactive_terminal_available() -> Bool {
 
 ///|
 #cfg(target="native")
-fn restore_console_output_cp(cp : UInt) -> Unit {
+fn stdout_terminal_available() -> Bool {
+  moon_taze_stdout_isatty()
+}
+
+///|
+#cfg(target="native")
+fn restore_console_output_cp(cp : UInt32) -> Unit {
   if cp != 0U {
     moon_taze_set_console_output_cp(cp)
   }
 }
 
 ///|
-priv suberror CliError {
-  CliError(String)
-}
-
-///|
-fn cli_error(message : String) -> Unit raise {
-  raise CliError(message)
-}
-
-///|
-fn parent_path(path : String) -> String? {
-  let mut index = path.length() - 1
-  while index >= 0 {
-    let c = path[index]
-    if c == '/' || c == '\\' {
-      if index == 0 {
-        return Some(path[:1].to_owned())
-      }
-      return Some(path[:index].to_owned())
-    }
-    index -= 1
-  }
-  None
-}
-
-///|
-async fn has_git_boundary(path : String) -> Bool {
-  @fs.exists(path + "\\.git") || @fs.exists(path + "/.git")
-}
-
-///|
-async fn find_legacy_manifest(start : String) -> String? {
-  let candidate = start + "\\moon.mod.json"
-  if @fs.exists(candidate) {
-    return Some(candidate)
-  }
-  let candidate_slash = start + "/moon.mod.json"
-  if @fs.exists(candidate_slash) {
-    return Some(candidate_slash)
-  }
-  if has_git_boundary(start) {
-    return None
-  }
-  match parent_path(start) {
-    None => None
-    Some(parent) =>
-      if parent == start {
-        None
-      } else {
-        find_legacy_manifest(parent)
-      }
-  }
-}
-
-///|
-async fn find_manifest(start : String) -> String? {
-  let candidate = start + "\\moon.mod"
-  if @fs.exists(candidate) {
-    return Some(candidate)
-  }
-  let candidate_slash = start + "/moon.mod"
-  if @fs.exists(candidate_slash) {
-    return Some(candidate_slash)
-  }
-  // A legacy manifest is a module boundary for discovery.  Stop here so a
-  // parent moon.mod cannot silently win over the nearest unsupported project.
-  if @fs.exists(start + "\\moon.mod.json") ||
-    @fs.exists(start + "/moon.mod.json") {
-    return None
-  }
-  // A workspace root is its own discovery boundary even when it does not
-  // contain a root moon.mod; its explicit members become the check scope.
-  if @fs.exists(start + "\\moon.work") || @fs.exists(start + "/moon.work") {
-    return None
-  }
-  if has_git_boundary(start) {
-    return None
-  }
-  match parent_path(start) {
-    None => None
-    Some(parent) => if parent == start { None } else { find_manifest(parent) }
-  }
-}
-
-///|
-async fn find_workspace(start : String) -> String? {
-  let candidate = start + "\\moon.work"
-  if @fs.exists(candidate) {
-    return Some(candidate)
-  }
-  let candidate_slash = start + "/moon.work"
-  if @fs.exists(candidate_slash) {
-    return Some(candidate_slash)
-  }
-  if has_git_boundary(start) {
-    return None
-  }
-  match parent_path(start) {
-    None => None
-    Some(parent) => if parent == start { None } else { find_workspace(parent) }
-  }
-}
-
-///|
-fn module_name_from_source(source : Bytes) -> String {
-  let text = if source.length() >= 3 &&
-    source[0] == 0xef &&
-    source[1] == 0xbb &&
-    source[2] == 0xbf {
-    @utf8.decode_lossy(source[3:])
-  } else {
-    @utf8.decode_lossy(source)
-  }
-  for line in text.split("\n") {
-    let line = line.trim().to_owned()
-    if line.has_prefix("name") &&
-      (
-        line.length() == 4 ||
-        line[4] == ' ' ||
-        line[4] == '\t' ||
-        line[4] == '='
-      ) {
-      match line.split_once("=") {
-        Some((_, right)) => {
-          let value = right.trim()
-          if value.length() >= 2 && value[0] == '"' {
-            let mut index = 1
-            let mut escaped = false
-            while index < value.length() {
-              if escaped {
-                escaped = false
-              } else if value[index] == '\\' {
-                escaped = true
-              } else if value[index] == '"' {
-                return value[1:index].to_owned()
-              }
-              index += 1
-            }
-          }
-        }
-        None => ()
-      }
-    }
-  }
-  ""
-}
-
-///|
-fn mode_name(mode : @taze.UpdateMode) -> String {
-  match mode {
-    Default => "default"
-    Major => "major"
-    Minor => "minor"
-    Patch => "patch"
-    Latest => "latest"
-    Stable => "stable"
-    Newest => "newest"
-    Next => "next"
-  }
-}
-
-///|
-fn parse_mode(name : String) -> @taze.UpdateMode? {
-  match name {
-    "default" => Some(@taze.UpdateMode::Default)
-    "major" => Some(@taze.UpdateMode::Major)
-    "minor" => Some(@taze.UpdateMode::Minor)
-    "patch" => Some(@taze.UpdateMode::Patch)
-    "latest" => Some(@taze.UpdateMode::Latest)
-    "stable" => Some(@taze.UpdateMode::Stable)
-    "newest" => Some(@taze.UpdateMode::Newest)
-    "next" => Some(@taze.UpdateMode::Next)
-    _ => None
-  }
-}
-
-///|
-fn diff_rank(value : @taze.DiffKind?) -> Int {
-  match value {
-    None => 0
-    Some(Prerelease) => 1
-    Some(Patch) => 2
-    Some(Minor) => 3
-    Some(Major) => 4
-  }
-}
-
-///|
-fn sort_changes(
-  changes : Array[@taze.DependencyChange],
-  sort_mode : String,
-  published_at? : Map[String, Int64] = Map([]),
-) -> Array[@taze.DependencyChange] {
-  let result = changes.copy()
-  result.sort_by((left, right) => {
-    let status_rank = fn(change : @taze.DependencyChange) -> Int {
-      match change.status {
-        UpdateAvailable => 0
-        UpToDate => 1
-        NoCandidate => 2
-        Skipped => 3
-        Error => 4
-      }
-    }
-    let time_key = fn(change : @taze.DependencyChange) -> Int64? {
-      let version = match sort_mode {
-        "time-asc" | "time-desc" =>
-          change.target.unwrap_or(change.dependency.version)
-        _ => return None
-      }
-      published_at.get(change.dependency.name + "@" + version)
-    }
-    let compare_time = fn(
-      left_time : Int64?,
-      right_time : Int64?,
-      descending : Bool,
-    ) -> Int {
-      match (left_time, right_time) {
-        (None, None) => 0
-        (None, Some(_)) => 1
-        (Some(_), None) => -1
-        (Some(left_value), Some(right_value)) =>
-          if descending {
-            right_value.compare(left_value)
-          } else {
-            left_value.compare(right_value)
-          }
-      }
-    }
-    let comparison = match sort_mode {
-      "name-asc" => left.dependency.name.compare(right.dependency.name)
-      "name-desc" => right.dependency.name.compare(left.dependency.name)
-      "diff-asc" => diff_rank(left.diff).compare(diff_rank(right.diff))
-      "diff-desc" => diff_rank(right.diff).compare(diff_rank(left.diff))
-      "time-asc" => {
-        let status = status_rank(left).compare(status_rank(right))
-        if status == 0 {
-          compare_time(time_key(left), time_key(right), false)
-        } else {
-          status
-        }
-      }
-      "time-desc" => {
-        let status = status_rank(left).compare(status_rank(right))
-        if status == 0 {
-          compare_time(time_key(left), time_key(right), true)
-        } else {
-          status
-        }
-      }
-      _ => 0
-    }
-    if comparison != 0 {
-      comparison
-    } else {
-      let by_name = left.dependency.name.compare(right.dependency.name)
-      if by_name != 0 {
-        by_name
-      } else {
-        let by_manifest = left.dependency.manifest.compare(
-          right.dependency.manifest,
-        )
-        if by_manifest != 0 {
-          by_manifest
-        } else {
-          left.dependency.version.compare(right.dependency.version)
-        }
-      }
-    }
-  })
-  result
-}
-
-///|
-fn append_selectors(target : Array[String], value : String) -> Unit {
-  for item in value.split(",") {
-    let selector = item.trim().to_owned()
-    if selector != "" {
-      target.push(selector)
-    }
-  }
-}
-
-///|
-fn json_text(value : String) -> Json {
-  Json::string(value)
-}
-
-///|
-fn json_optional(value : String?) -> Json {
-  match value {
-    Some(value) => json_text(value)
-    None => Json::null()
-  }
-}
-
-///|
-fn format_time_diff(current : Int64?, target : Int64?) -> String {
-  match (current, target) {
-    (Some(current), Some(target)) => {
-      let seconds = (target - current) / 1000
-      let sign = if seconds < 0 { "-" } else { "+" }
-      let magnitude = if seconds < 0 { -seconds } else { seconds }
-      if magnitude >= 86400 {
-        "\{sign}\{magnitude / 86400}d"
-      } else if magnitude >= 3600 {
-        "\{sign}\{magnitude / 3600}h"
-      } else if magnitude >= 60 {
-        "\{sign}\{magnitude / 60}m"
-      } else {
-        "\{sign}\{magnitude}s"
-      }
-    }
-    _ => "unknown"
-  }
-}
-
-///|
-/// Format a release timestamp the same way taze presents version ages in its
-/// interactive table. The registry stores milliseconds since the Unix epoch.
-fn format_release_age(value : Int64?, now? : Int64 = @async.now()) -> String {
-  match value {
-    None => "unknown"
-    Some(published) => {
-      let elapsed = now - published
-      if elapsed < 3600000L {
-        "<1h"
-      } else if elapsed < 360000000L {
-        "~\{((elapsed + 1800000L) / 3600000L)}h"
-      } else if elapsed < 2592000000L {
-        "~\{((elapsed + 43200000L) / 86400000L)}d"
-      } else if elapsed < 31536000000L {
-        "~\{((elapsed + 1296000000L) / 2592000000L)}mo"
-      } else {
-        let tenths = (elapsed * 10L + 1576800000L) / 31536000000L
-        "~\{tenths / 10}.\{tenths % 10}y"
-      }
-    }
-  }
-}
-
-///|
-fn json_diagnostic(value : @taze.Diagnostic) -> Json {
-  let object : Map[String, Json] = Map([])
-  object["severity"] = json_text(
-    match value.severity {
-      Warning => "warning"
-      Error => "error"
-    },
-  )
-  object["code"] = json_text(value.code)
-  object["message"] = json_text(value.message)
-  object["manifest"] = json_optional(value.manifest)
-  object["dependency"] = json_optional(value.dependency)
-  object["line"] = match value.line {
-    Some(value) => Json::number(value.to_double())
-    None => Json::null()
-  }
-  object["column"] = match value.column {
-    Some(value) => Json::number(value.to_double())
-    None => Json::null()
-  }
-  Json::object(object)
-}
-
-///|
-fn json_change(
-  value : @taze.DependencyChange,
-  published_at? : Map[String, Int64] = Map([]),
-) -> Json {
-  let object : Map[String, Json] = Map([])
-  object["name"] = json_text(value.dependency.name)
-  object["current"] = json_text(value.dependency.version)
-  object["target"] = json_optional(value.target)
-  object["mode"] = json_text(mode_name(value.mode))
-  object["status"] = json_text(
-    match value.status {
-      UpdateAvailable => "update_available"
-      UpToDate => "up_to_date"
-      NoCandidate => "no_candidate"
-      Skipped => "skipped"
-      Error => "error"
-    },
-  )
-  object["diff"] = match value.diff {
-    Some(Major) => json_text("major")
-    Some(Minor) => json_text("minor")
-    Some(Patch) => json_text("patch")
-    Some(Prerelease) => json_text("prerelease")
-    None => Json::null()
-  }
-  object["reason"] = json_optional(value.reason)
-  object["selected"] = Json::boolean(false)
-  object["applied"] = Json::boolean(false)
-  let current_time = published_at.get(
-    value.dependency.name + "@" + value.dependency.version,
-  )
-  let target_time = match value.target {
-    Some(target) => published_at.get(value.dependency.name + "@" + target)
-    None => None
-  }
-  object["currentPublishedAt"] = match current_time {
-    Some(value) => Json::number(value.to_double())
-    None => Json::null()
-  }
-  object["targetPublishedAt"] = match target_time {
-    Some(value) => Json::number(value.to_double())
-    None => Json::null()
-  }
-  object["timeDiffSeconds"] = match (current_time, target_time) {
-    (Some(current), Some(target)) =>
-      Json::number((target - current).to_double() / 1000.0)
-    _ => Json::null()
-  }
-  Json::object(object)
-}
-
-///|
-fn json_apply_status(value : @taze.ApplyStatus) -> String {
-  match value {
-    Succeeded => "succeeded"
-    Failed => "failed"
-    Partial => "partial"
-    Cancelled => "cancelled"
-  }
-}
-
-///|
-fn json_file_status(value : @taze.FileApplyStatus) -> String {
-  match value {
-    Written => "written"
-    Unchanged => "unchanged"
-    Failed => "failed"
-    NotAttempted => "not_attempted"
-  }
-}
-
-///|
-struct VerificationResult {
-  path : String
-  passed : Bool
-  exit_code : Int
-}
-
-///|
-fn render_json(
-  plan : @taze.CheckPlan,
-  mode : @taze.UpdateMode,
-  report : @taze.ApplyReport?,
-  verification : Array[VerificationResult],
-  fail_on_outdated : Bool,
-  published_at? : Map[String, Int64] = Map([]),
-  extra_diagnostics? : Array[@taze.Diagnostic] = [],
-) -> String {
-  let changes = plan.changes()
-  let project_paths : Array[String] = []
-  for change in changes {
-    if !project_paths.contains(change.dependency.manifest) {
-      project_paths.push(change.dependency.manifest)
-    }
-  }
-  project_paths.sort()
-  let projects : Array[Json] = []
-  for path in project_paths {
-    let dependencies = changes
-      .filter(change => change.dependency.manifest == path)
-      .map(change => json_change(change, published_at~))
-    let object : Map[String, Json] = Map([])
-    object["manifest"] = json_text(path)
-    let mut module_name = ""
-    for change in changes {
-      if change.dependency.manifest == path {
-        module_name = change.dependency.module
-        break
-      }
-    }
-    object["module"] = json_text(module_name)
-    object["dependencies"] = Json::array(dependencies)
-    projects.push(Json::object(object))
-  }
-  let mut updates = 0
-  let mut skipped = 0
-  for change in changes {
-    match change.status {
-      UpdateAvailable => updates += 1
-      Skipped => skipped += 1
-      _ => ()
-    }
-  }
-  let mut errors = 0
-  for item in plan.diagnostics() {
-    match item.severity {
-      Error => errors += 1
-      _ => ()
-    }
-  }
-  let summary : Map[String, Json] = Map([])
-  summary["checked"] = Json::number((changes.length() - skipped).to_double())
-  summary["updates"] = Json::number(updates.to_double())
-  summary["skipped"] = Json::number(skipped.to_double())
-  summary["errors"] = Json::number(errors.to_double())
-  summary["writtenFiles"] = Json::number(
-    match report {
-      Some(value) => value.written_files().to_double()
-      None => 0.0
-    },
-  )
-  let diagnostic_values = plan.diagnostics()
-  diagnostic_values.append(extra_diagnostics)
-  match report {
-    Some(value) => diagnostic_values.append(value.diagnostics())
-    None => ()
-  }
-  let diagnostics = diagnostic_values.map(json_diagnostic)
-  let apply : Map[String, Json] = Map([])
-  apply["status"] = match report {
-    Some(value) => json_text(json_apply_status(value.status()))
-    None => json_text("not_requested")
-  }
-  let files = match report {
-    Some(value) =>
-      value
-      .files()
-      .map(file => {
-        let item : Map[String, Json] = Map([])
-        item["manifest"] = json_text(file.manifest())
-        item["status"] = json_text(json_file_status(file.status()))
-        item["changedDependencies"] = Json::number(
-          file.changed_dependencies().to_double(),
-        )
-        Json::object(item)
-      })
-    None => []
-  }
-  apply["files"] = Json::array(files)
-  apply["verification"] = Json::array(
-    verification.map(value => {
-      let item : Map[String, Json] = Map([])
-      item["path"] = json_text(value.path)
-      item["status"] = json_text(if value.passed { "passed" } else { "failed" })
-      item["exitCode"] = Json::number(value.exit_code.to_double())
-      Json::object(item)
-    }),
-  )
-  let root : Map[String, Json] = Map([])
-  root["schemaVersion"] = Json::number(1.0)
-  root["mode"] = json_text(mode_name(mode))
-  let apply_error = match report {
-    Some(value) =>
-      match value.status() {
-        Succeeded => false
-        _ => true
-      }
-    None => false
-  }
-  let fail_outdated = fail_on_outdated && updates > 0
-  root["status"] = json_text(
-    if errors > 0 || apply_error || verification.any(item => !item.passed) {
-      "error"
-    } else {
-      "ok"
-    },
-  )
-  root["projects"] = Json::array(projects)
-  root["summary"] = Json::object(summary)
-  root["diagnostics"] = Json::array(diagnostics)
-  root["apply"] = Json::object(apply)
-  root["exitCode"] = Json::number(
-    match report {
-      Some(value) =>
-        if value.exit_code() != 0 || verification.any(item => !item.passed) {
-          2.0
-        } else if fail_outdated {
-          1.0
-        } else {
-          0.0
-        }
-      None => if errors > 0 { 2.0 } else if fail_outdated { 1.0 } else { 0.0 }
-    },
-  )
-  Json::object(root).stringify()
-}
-
-///|
-fn render_cli_error_json(message : String) -> String {
-  let root : Map[String, Json] = Map([])
-  root["schemaVersion"] = Json::number(1.0)
-  root["mode"] = Json::null()
-  root["status"] = json_text("error")
-  root["projects"] = Json::array([])
-  let summary : Map[String, Json] = Map([])
-  summary["checked"] = Json::number(0.0)
-  summary["updates"] = Json::number(0.0)
-  summary["skipped"] = Json::number(0.0)
-  summary["errors"] = Json::number(1.0)
-  summary["writtenFiles"] = Json::number(0.0)
-  root["summary"] = Json::object(summary)
-  let diagnostic : Map[String, Json] = Map([])
-  diagnostic["severity"] = json_text("error")
-  diagnostic["code"] = json_text("cli_error")
-  diagnostic["message"] = json_text(message)
-  diagnostic["manifest"] = Json::null()
-  diagnostic["dependency"] = Json::null()
-  diagnostic["line"] = Json::null()
-  diagnostic["column"] = Json::null()
-  root["diagnostics"] = Json::array([Json::object(diagnostic)])
-  let apply : Map[String, Json] = Map([])
-  apply["status"] = json_text("not_requested")
-  apply["files"] = Json::array([])
-  apply["verification"] = Json::array([])
-  root["apply"] = Json::object(apply)
-  root["exitCode"] = Json::number(2.0)
-  Json::object(root).stringify()
-}
-
-///|
-fn retryable_cli_registry_error(error : @taze.RegistryError) -> Bool {
-  match error {
-    @taze.RegistryError::InvalidMetadata(_) => false
-    @taze.RegistryError::RequestFailed(message) =>
-      message == "request_timeout" ||
-      message.has_prefix("HTTP 408") ||
-      message.has_prefix("HTTP 429") ||
-      message.has_prefix("HTTP 5")
-  }
-}
-
-///|
-fn retry_after_ms(error : @taze.RegistryError) -> Int? {
-  match error {
-    @taze.RegistryError::RequestFailed(message) =>
-      match message.split_once("|retry-after-ms=") {
-        Some((_, value)) =>
-          Some(@string.parse_int(value.to_owned())) catch {
-            _ => None
-          }
-        None => None
-      }
-    @taze.RegistryError::InvalidMetadata(_) => None
-  }
-}
-
-///|
-async fn verify_directory(path : String, emit~ : (String) -> Unit) -> Bool {
-  let (code, _, _) = @process.collect_output("moon", ["check"], cwd=path) catch {
-    error => {
-      emit("error[moon_unavailable]: \{error}")
-      return false
-    }
-  }
-  if code == 0 {
-    true
-  } else {
-    emit("error[verification_failed]: moon check exited \{code} in \{path}")
-    false
-  }
-}
-
-///|
-async fn fetch_with_retries(
-  fetch~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
-  name : String,
-  retries : Int,
-  delay_ms? : Int = 0,
-) -> @taze.ModuleMetadata raise @taze.RegistryError {
-  fetch_with_retries_attempt(fetch~, name, retries, delay_ms, 0)
-}
-
-///|
-async fn fetch_with_retries_attempt(
-  fetch~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
-  name : String,
-  retries : Int,
-  delay_ms : Int,
-  attempt : Int,
-) -> @taze.ModuleMetadata raise @taze.RegistryError {
-  fetch(name) catch {
-    error => {
-      if !retryable_cli_registry_error(error) || attempt >= retries {
-        raise error
-      }
-      let retry_after = retry_after_ms(error)
-      let delay = match retry_after {
-        Some(value) if value >= 0 => value
-        _ => {
-          let mut value = delay_ms
-          for _ in 0..<attempt {
-            value = value * 2
-          }
-          value
-        }
-      }
-      if delay > 0 {
-        @async.sleep(delay) catch {
-          _ => ()
-        }
-      }
-      fetch_with_retries_attempt(fetch~, name, retries, delay_ms, attempt + 1)
-    }
-  }
-}
-
-///|
 async fn fetch_mooncakes_version_cli(
-  module : String,
+  module_name : String,
   version : String,
 ) -> @taze.VersionMetadata? raise @taze.RegistryError {
   Some(
-    @taze.query_mooncakes_version(root="https://mooncakes.io", module, version),
+    @taze.query_mooncakes_version(
+      root="https://mooncakes.io",
+      module_name,
+      version,
+    ),
   )
 }
 
 ///|
-async fn no_version_timestamp(
-  _module : String,
-  _version : String,
-) -> @taze.VersionMetadata? raise @taze.RegistryError {
-  None
+async fn default_gha_fetch_cli(
+  repo : String,
+) -> @taze.ModuleMetadata raise @taze.RegistryError {
+  @taze.query_github_tags(repo)
 }
 
 ///|
-async fn fetch_version_with_retries(
-  fetch_version~ : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError,
-  module : String,
-  version : String,
-  retries : Int,
-  delay_ms : Int,
-) -> @taze.VersionMetadata? raise @taze.RegistryError {
-  fetch_version_with_retries_attempt(
-    fetch_version~,
-    module,
-    version,
-    retries,
-    delay_ms,
-    0,
-  )
+async fn default_gha_commit_date_cli(
+  repo : String,
+  sha : String,
+) -> Int64? raise @taze.RegistryError {
+  @taze.query_github_commit_date(repo, sha)
 }
 
 ///|
-async fn fetch_version_with_retries_attempt(
-  fetch_version~ : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError,
-  module : String,
-  version : String,
-  retries : Int,
-  delay_ms : Int,
-  attempt : Int,
-) -> @taze.VersionMetadata? raise @taze.RegistryError {
-  fetch_version(module, version) catch {
-    error => {
-      if !retryable_cli_registry_error(error) || attempt >= retries {
-        raise error
-      }
-      let delay = match retry_after_ms(error) {
-        Some(value) if value >= 0 => value
-        _ => {
-          let mut computed = delay_ms
-          for _ in 0..<attempt {
-            computed = computed * 2
-          }
-          computed
-        }
-      }
-      if delay > 0 {
-        @async.sleep(delay) catch {
-          _ => ()
-        }
-      }
-      fetch_version_with_retries_attempt(
-        fetch_version~,
-        module,
-        version,
-        retries,
-        delay_ms,
-        attempt + 1,
-      )
-    }
-  }
-}
-
-///|
-/// Fill the overview with detail timestamps only when a caller requested
-/// time-sensitive behavior. Detail responses are shared across all consumers
-/// in one CLI invocation, including missing timestamps.
 async fn enrich_release_times(
   metadata : @taze.ModuleMetadata,
   fetch_version : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError,
   detail_times : Map[String, Int64],
   detail_missing : Map[String, Bool],
-  retries : Int,
-  delay_ms : Int,
+  retries : Int32,
+  delay_ms : Int32,
 ) -> @taze.ModuleMetadata raise @taze.RegistryError {
   let versions = metadata.versions.copy()
   for index in 0..<versions.length() {
     let item = versions[index]
-    let key = metadata.module + "@" + item.version
+    let key = metadata.module_name + "@" + item.version
     match item.published_at {
       Some(value) => detail_times[key] = value
       None if detail_times.contains(key) || detail_missing.contains(key) => ()
       None => {
-        let timestamp = fetch_version_with_retries(
-          fetch_version~,
-          metadata.module,
-          item.version,
-          retries,
-          delay_ms,
-        )
+        let timestamp = @taze.retry_registry(retries~, delay_ms~, () => {
+          fetch_version(metadata.module_name, item.version)
+        })
         match timestamp {
           Some(value) => {
             match value.published_at {
@@ -853,11 +100,186 @@ async fn enrich_release_times(
       }
     }
   }
-  @taze.ModuleMetadata::ModuleMetadata(
-    metadata.module,
-    metadata.latest,
-    versions,
-  )
+  @taze.ModuleMetadata(metadata.module_name, metadata.latest, versions)
+}
+
+///|
+async fn enrich_gha_release_times(
+  metadata : @taze.ModuleMetadata,
+  fetch_commit_date : async (String, String) -> Int64? raise @taze.RegistryError,
+  detail_times : Map[String, Int64],
+  detail_missing : Map[String, Bool],
+  retries : Int32,
+  delay_ms : Int32,
+) -> @taze.ModuleMetadata noraise {
+  let versions = metadata.versions.copy()
+  for index in 0..<versions.length() {
+    let item = versions[index]
+    let key = metadata.module_name + "@" + item.version
+    match item.published_at {
+      Some(value) => detail_times[key] = value
+      None if detail_times.contains(key) || detail_missing.contains(key) => ()
+      None =>
+        if item.sha is Some(sha) {
+          let ts = @taze.retry_registry(retries~, delay_ms~, () => {
+            fetch_commit_date(metadata.module_name, sha)
+          }) catch {
+            _ => None
+          }
+          match ts {
+            Some(published_at) => {
+              detail_times[key] = published_at
+              versions[index] = @taze.VersionMetadata(
+                item.version,
+                item.yanked,
+                item.yanked_reason,
+                Some(published_at),
+                sha=item.sha,
+              )
+            }
+            None => detail_missing[key] = true
+          }
+        }
+    }
+  }
+  @taze.ModuleMetadata(metadata.module_name, metadata.latest, versions)
+}
+
+///|
+priv enum AgeFetchTask {
+  MooncakesAge(String, String)
+  GitHubAge(String, String, String)
+}
+
+///|
+fn seed_detail_times_from_cache(
+  cache : Map[String, @taze.ModuleMetadata],
+  detail_times : Map[String, Int64],
+) -> Unit {
+  for _, metadata in cache {
+    for item in metadata.versions {
+      if item.published_at is Some(ts) {
+        detail_times[metadata.module_name + "@" + item.version] = ts
+      }
+    }
+  }
+}
+
+///|
+fn apply_detail_times_to_cache(
+  cache : Map[String, @taze.ModuleMetadata],
+  detail_times : Map[String, Int64],
+) -> Bool {
+  let mut updated_any = false
+  let keys = cache.keys().to_array()
+  for key in keys {
+    guard cache.get(key) is Some(metadata) else { continue }
+    let mut changed = false
+    let versions = metadata.versions.copy()
+    for i in 0..<versions.length() {
+      let item = versions[i]
+      if item.published_at is None {
+        let time_key = metadata.module_name + "@" + item.version
+        if detail_times.get(time_key) is Some(ts) {
+          versions[i] = @taze.VersionMetadata(
+            item.version,
+            item.yanked,
+            item.yanked_reason,
+            Some(ts),
+            sha=item.sha,
+          )
+          changed = true
+        }
+      }
+    }
+    if changed {
+      cache[key] = @taze.ModuleMetadata(
+        metadata.module_name,
+        metadata.latest,
+        versions,
+      )
+      updated_any = true
+    }
+  }
+  updated_any
+}
+
+///|
+async fn merge_config(
+  options : CliOptions,
+  config_root : String,
+  emit~ : (String) -> Unit,
+) -> Unit {
+  let config_path = config_root + "/moon-taze.json"
+  if !@fs.exists(config_path) {
+    return
+  }
+  let loaded = @taze.read_config(config_path)
+  if !options.json_output && !options.silent {
+    for issue in loaded.diagnostics {
+      emit("error[\{issue.code}]: \{issue.message}")
+    }
+  }
+  guard loaded.config is Some(config) else {
+    cli_error("invalid_config")
+    return
+  }
+  if config.mode is Some(value) && !options.mode_seen {
+    match parse_mode(value) {
+      Some(parsed) => options.mode = parsed
+      None => cli_error("invalid_config: unknown mode \{value}")
+    }
+  }
+  if !options.recursive_seen && config.recursive is Some(value) {
+    options.recursive = value
+  }
+  if !options.all_seen && config.all is Some(value) {
+    options.show_all = value
+  }
+  if options.include_selectors.is_empty() &&
+    config.include_selectors is Some(values) {
+    options.include_selectors.append(values)
+  }
+  if options.exclude_selectors.is_empty() && config.exclude is Some(values) {
+    options.exclude_selectors.append(values)
+  }
+  if !options.retry_seen && config.retry is Some(value) {
+    if value < 0 {
+      cli_error("invalid_config: retry must be non-negative")
+    }
+    options.retry_count = value
+  }
+  if !options.force_seen && config.force is Some(value) {
+    options.force = value
+  }
+  if !options.fail_on_outdated_seen && config.failOnOutdated is Some(value) {
+    options.fail_on_outdated = value
+  }
+  if !options.timediff_seen && config.timediff is Some(value) {
+    options.timediff = value
+  }
+  if !options.maturity_seen && config.maturityPeriod is Some(value) {
+    if value < 0 {
+      cli_error("invalid_config: maturityPeriod must be non-negative")
+    }
+    options.maturity_days = value
+  }
+  if !options.maturity_exclude_seen &&
+    config.maturityPeriodExclude is Some(values) {
+    options.maturity_exclude.append(values)
+  }
+  let (gha_enabled, gha_style) = config.resolve_github_actions() catch {
+    err => {
+      cli_error("invalid_config: \{err}")
+      (None, None)
+    }
+  }
+  if !options.github_actions_seen && gha_enabled is Some(value) {
+    options.github_actions = value
+  }
+  if !options.github_actions_style_seen && gha_style is Some(value) {
+    options.github_actions_style = value
+  }
 }
 
 ///|
@@ -865,13 +287,23 @@ async fn run_cli(
   args : Array[String],
   fetch~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
   emit~ : (String) -> Unit,
-  cache? : Map[String, @taze.ModuleMetadata] = Map([]),
-  cache_times? : Map[String, UInt64] = Map([]),
-  cache_path? : String? = None,
-  retry_delay_ms? : Int = 0,
-  fetch_version? : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError = no_version_timestamp,
-  interactive_tty? : Bool? = None,
-) -> Int {
+  cache~ : Map[String, @taze.ModuleMetadata] = Map([]),
+  cache_times~ : Map[String, UInt64] = Map([]),
+  cache_path~ : String? = None,
+  retry_delay_ms~ : Int32 = 0,
+  fetch_version~ : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError = (
+    _,
+    _,
+  ) => None,
+  fetch_gha~ : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError = default_gha_fetch_cli,
+  fetch_gha_commit_date~ : async (String, String) -> Int64? raise @taze.RegistryError = (
+    _,
+    _,
+  ) => None,
+  interactive_tty~ : Bool? = None,
+  color~ : Bool? = None,
+  now_ms~ : Int64? = None,
+) -> Int32 {
   run_cli_inner(
     args,
     fetch~,
@@ -881,36 +313,30 @@ async fn run_cli(
     cache_path,
     retry_delay_ms,
     fetch_version,
+    fetch_gha,
+    fetch_gha_commit_date,
     interactive_tty,
+    color,
+    now_ms,
   ) catch {
-    CliError(message) => {
+    CliError(code~, message~) => {
       if args.any(item => item == "--json") {
-        emit(render_cli_error_json(message))
+        emit(render_cli_error_json(code, message))
       } else {
-        emit(message)
+        emit("error[\{code}]: \{message}")
       }
       2
     }
-    error =>
-      if @async.is_cancellation_error(error) {
-        if args.any(item => item == "--json") {
-          emit(render_cli_error_json("cancelled"))
-        } else {
-          emit("cancelled")
-        }
-        0
+    error => {
+      if args.any(item => item == "--json") {
+        emit(render_cli_error_json("cli_error", "\{error}"))
       } else {
-        if args.any(item => item == "--json") {
-          emit(render_cli_error_json("\{error}"))
-        } else {
-          emit("error: \{error}")
-        }
-        2
+        emit("error: \{error}")
       }
+      2
+    }
   }
 }
-
-///|
 
 ///|
 async fn run_cli_inner(
@@ -920,273 +346,51 @@ async fn run_cli_inner(
   cache~ : Map[String, @taze.ModuleMetadata],
   cache_times : Map[String, UInt64],
   cache_path : String?,
-  retry_delay_ms : Int,
+  retry_delay_ms : Int32,
   fetch_version : async (String, String) -> @taze.VersionMetadata? raise @taze.RegistryError,
+  fetch_gha : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError,
+  fetch_gha_commit_date : async (String, String) -> Int64? raise @taze.RegistryError,
   interactive_tty : Bool?,
-) -> Int {
-  let argv = argv_without_program(args)
-  let matches = cli_command().parse(argv=normalize_cli_argv(argv)) catch {
-    error => raise CliError::CliError(error.to_string())
-  }
-  if match_flag(matches, "help") {
-    emit(usage())
-    return 0
-  }
-  if match_flag(matches, "version") {
-    emit(VERSION)
-    return 0
-  }
-  let mut mode = @taze.UpdateMode::Default
-  let mut cwd = @env.current_dir().unwrap_or(".")
-  let mut show_all = false
-  let mut write = false
-  let mut interactive = false
-  let mut json_output = false
-  let mut silent = false
-  let mut verify = false
-  let mut retry_count = 4
-  let mut retry_seen = false
-  let mut force = false
-  let mut force_seen = false
-  let mut fail_on_outdated = false
-  let mut fail_on_outdated_seen = false
-  let mut maturity_days = 0
-  let mut maturity_seen = false
-  let mut timediff = false
-  let mut timediff_seen = false
-  let maturity_exclude : Array[String] = []
-  let mut maturity_exclude_seen = false
-  let mut recursive = false
-  let mut recursive_seen = false
-  let mut group_output = false
-  let mut sort_mode = "name-asc"
-  let mut all_seen = false
-  let include : Array[String] = []
-  let exclude : Array[String] = []
-  let mut mode_seen = false
-  show_all = match_flag(matches, "all")
-  write = match_flag(matches, "write")
-  interactive = match_flag(matches, "interactive")
-  json_output = match_flag(matches, "json")
-  silent = match_flag(matches, "silent")
-  verify = match_flag(matches, "verify")
-  recursive = match_flag(matches, "recursive")
-  recursive_seen = match_seen_from_argv(matches, "recursive")
-  all_seen = match_seen_from_argv(matches, "all")
-  group_output = match_flag(matches, "group")
-  force = match_flag(matches, "force")
-  force_seen = match_seen_from_argv(matches, "force")
-  fail_on_outdated = match_flag(matches, "fail-on-outdated")
-  fail_on_outdated_seen = match_seen_from_argv(matches, "fail-on-outdated")
-  timediff = match_flag(matches, "timediff")
-  timediff_seen = match_seen_from_argv(matches, "timediff")
-  maturity_seen = match_seen_from_argv(matches, "maturity-period")
-  maturity_exclude_seen = match_seen_from_argv(
-    matches, "maturity-period-exclude",
-  )
-  retry_seen = match_seen_from_argv(matches, "retry") ||
-    match_seen_from_argv(matches, "no-retry")
-  for selector in match_values(matches, "include") {
-    append_selectors(include, selector)
-  }
-  for selector in match_values(matches, "exclude") {
-    append_selectors(exclude, selector)
-  }
-  for selector in match_values(matches, "maturity-period-exclude") {
-    append_selectors(maturity_exclude, selector)
-  }
-  match match_value(matches, "cwd") {
-    Some(value) => cwd = value
-    None => ()
-  }
-  match match_value(matches, "sort") {
-    Some(value) =>
-      match value {
-        "diff-asc"
-        | "diff-desc"
-        | "name-asc"
-        | "name-desc"
-        | "time-asc"
-        | "time-desc" => sort_mode = value
-        _ => cli_error("invalid sort value: \{value}")
-      }
-    None => ()
-  }
-  match match_value(matches, "retry") {
-    Some(value) => {
-      retry_count = @string.parse_int(value) catch { _ => -1 }
-      if retry_count < 0 {
-        cli_error("invalid retry count: \{value}")
-      }
+  color : Bool?,
+  now_ms : Int64?,
+) -> Int32 {
+  let options = match parse_cli_args(args) {
+    Help(text) => {
+      emit(text)
+      return 0
     }
-    None => if match_flag(matches, "no-retry") { retry_count = 0 }
-  }
-  match match_value(matches, "maturity-period") {
-    Some(value) => {
-      maturity_days = @string.parse_int(value) catch { _ => -1 }
-      if maturity_days < 0 {
-        cli_error("invalid maturity period: \{value}")
-      }
+    Version(text) => {
+      emit(text)
+      return 0
     }
-    None => ()
+    Parsed(opts) => opts
   }
-  match matches.values.get("mode") {
-    Some(values) =>
-      match values.get(0) {
-        Some(value) =>
-          match parse_mode(value) {
-            Some(parsed) => {
-              mode = parsed
-              mode_seen = true
-            }
-            None => cli_error("unknown update mode: \{value}")
-          }
-        None => ()
-      }
-    None => ()
-  }
-  // Machine-readable output must never block on a terminal prompt.
-  if json_output {
-    interactive = false
-  }
-  if interactive {
-    match interactive_tty {
-      Some(true) => ()
-      _ => cli_error("interactive_requires_tty: --interactive requires a TTY")
-    }
-  }
-  cwd = @fs.realpath(cwd) catch { _ => cwd }
-  let manifest_path = match find_manifest(cwd) {
+  options.cwd = @fs.realpath(options.cwd) catch { _ => options.cwd }
+  let manifest_path = match find_manifest(options.cwd) {
     Some(path) => {
-      let manifest_dir = parent_path(path).unwrap_or(cwd)
-      let old_path = manifest_dir + "\\moon.mod.json"
-      let old_path_slash = manifest_dir + "/moon.mod.json"
-      if @fs.exists(old_path) || @fs.exists(old_path_slash) {
+      let manifest_dir = parent_path(path).unwrap_or(options.cwd)
+      if @fs.exists(manifest_dir + "\\moon.mod.json") ||
+        @fs.exists(manifest_dir + "/moon.mod.json") {
         cli_error("ambiguous_manifest: both moon.mod and moon.mod.json exist")
-        return 2
       }
-      path
+      Some(path)
     }
-    None =>
-      match find_workspace(cwd) {
-        Some(workspace) => workspace + "/moon.work"
-        None =>
-          match find_legacy_manifest(cwd) {
-            Some(path) => {
-              cli_error(
-                "unsupported_manifest: moon.mod.json is not supported at \{path}",
-              )
-              ""
-            }
-            None => {
-              cli_error("no_manifest: no moon.mod found from \{cwd}")
-              ""
-            }
-          }
-      }
+    None => None
   }
-  let workspace_path = find_workspace(cwd)
+  let workspace_path = find_workspace(options.cwd)
   let config_root = match workspace_path {
-    Some(path) => parent_path(path).unwrap_or(cwd)
-    None => parent_path(manifest_path).unwrap_or(cwd)
+    Some(path) => parent_path(path).unwrap_or(options.cwd)
+    None =>
+      match manifest_path {
+        Some(path) => parent_path(path).unwrap_or(options.cwd)
+        None => options.cwd
+      }
   }
-  let config_path = config_root + "/moon-taze.json"
-  if @fs.exists(config_path) {
-    let loaded = @taze.read_config(config_path)
-    if !json_output && !silent {
-      for issue in loaded.diagnostics {
-        emit("error[\{issue.code}]: \{issue.message}")
-      }
-    }
-    if loaded.config is None {
-      cli_error("invalid_config")
-    }
-    let config = loaded.config.unwrap()
-    match config.mode {
-      Some(value) =>
-        if !mode_seen {
-          match parse_mode(value) {
-            Some(parsed) => mode = parsed
-            None => cli_error("invalid_config: unknown mode \{value}")
-          }
-        }
-      None => ()
-    }
-    if !recursive_seen {
-      match config.recursive {
-        Some(value) => recursive = value
-        None => ()
-      }
-    }
-    if !all_seen {
-      match config.all {
-        Some(value) => show_all = value
-        None => ()
-      }
-    }
-    if include.is_empty() {
-      match config.include {
-        Some(values) => include.append(values)
-        None => ()
-      }
-    }
-    if exclude.is_empty() {
-      match config.exclude {
-        Some(values) => exclude.append(values)
-        None => ()
-      }
-    }
-    if !retry_seen {
-      match config.retry {
-        Some(value) => {
-          if value < 0 {
-            cli_error("invalid_config: retry must be non-negative")
-          }
-          retry_count = value
-        }
-        None => ()
-      }
-    }
-    if !force_seen {
-      match config.force {
-        Some(value) => force = value
-        None => ()
-      }
-    }
-    if !fail_on_outdated_seen {
-      match config.failOnOutdated {
-        Some(value) => fail_on_outdated = value
-        None => ()
-      }
-    }
-    if !timediff_seen {
-      match config.timediff {
-        Some(value) => timediff = value
-        None => ()
-      }
-    }
-    if !maturity_seen {
-      match config.maturityPeriod {
-        Some(value) => {
-          if value < 0 {
-            cli_error("invalid_config: maturityPeriod must be non-negative")
-          }
-          maturity_days = value
-        }
-        None => ()
-      }
-    }
-    if !maturity_exclude_seen {
-      match config.maturityPeriodExclude {
-        Some(values) => maturity_exclude.append(values)
-        None => ()
-      }
-    }
-  }
-  if verify && !write {
+  merge_config(options, config_root, emit~)
+  if options.verify && !options.write {
     cli_error("invalid_option: --verify requires --write")
   }
-  for selector in maturity_exclude {
+  for selector in options.maturity_exclude {
     if !@taze.selector_valid(selector) {
       cli_error("invalid maturity exclusion: \{selector}")
     }
@@ -1194,77 +398,61 @@ async fn run_cli_inner(
   let manifests : Array[@taze.Manifest] = []
   let local_modules : Array[String] = []
   let mut workspace_root : String? = None
-  match workspace_path {
-    Some(path) => {
-      let parsed_workspace = @taze.read_workspace(path)
-      if !json_output && !silent {
-        for diagnostic in parsed_workspace.diagnostics {
-          let level = match diagnostic.severity {
-            Warning => "warning"
-            Error => "error"
-          }
-          emit("\{level}[\{diagnostic.code}]: \{diagnostic.message}")
+  if workspace_path is Some(path) {
+    let parsed_workspace = @taze.read_workspace(path)
+    if !options.json_output && !options.silent {
+      for diag in parsed_workspace.diagnostics {
+        let level = match diag.severity {
+          Warning => "warning"
+          Error => "error"
         }
-      }
-      if parsed_workspace.workspace is None {
-        cli_error("invalid_workspace")
-      }
-      let workspace = parsed_workspace.workspace.unwrap()
-      workspace_root = Some(workspace.root)
-      for member in workspace.members {
-        local_modules.push(member.module_name)
-      }
-      // At the workspace root, explicit members define the check scope. From
-      // inside a member, keep the usual nearest-module behavior.
-      let normalized_cwd = @fs.realpath(cwd) catch { _ => cwd }
-      let normalized_root = @fs.realpath(workspace.root) catch {
-        _ => workspace.root
-      }
-      if normalized_cwd == normalized_root {
-        for member in workspace.members {
-          manifests.push(member.manifest)
-        }
+        emit("\{level}[\{diag.code}]: \{diag.message}")
       }
     }
-    None => ()
+    guard parsed_workspace.workspace is Some(workspace) else {
+      cli_error("invalid_workspace")
+      return 2
+    }
+    workspace_root = Some(workspace.root)
+    for item in workspace.members {
+      local_modules.push(item.module_name)
+    }
+    let normalized_cwd = @fs.realpath(options.cwd) catch { _ => options.cwd }
+    let normalized_root = @fs.realpath(workspace.root) catch {
+      _ => workspace.root
+    }
+    if normalized_cwd == normalized_root {
+      for item in workspace.members {
+        manifests.push(item.manifest)
+      }
+    }
   }
-  if manifests.is_empty() {
-    let data = @fs.read_file(manifest_path) catch {
+  if manifests.is_empty() && manifest_path is Some(path) {
+    let source = @fs.read_binary(path) catch {
       error => {
         cli_error("manifest_read_error: \{error}")
-        return 2
+        b""
       }
     }
-    let source = data.binary()
-    let module_name = module_name_from_source(source)
-    let parsed = @taze.parse_manifest(source, path=manifest_path, module_name~)
+    let module_name = @taze.module_name_from_source(source)
+    let parsed = @taze.parse_manifest(source, path~, module_name~)
     guard parsed.manifest is Some(manifest) else {
-      if !json_output && !silent {
-        for diagnostic in parsed.diagnostics {
-          emit("error[\{diagnostic.code}]: \{diagnostic.message}")
+      if !options.json_output && !options.silent {
+        for diag in parsed.diagnostics {
+          emit("error[\{diag.code}]: \{diag.message}")
         }
       }
       return 2
     }
     manifests.push(manifest)
   }
-  if recursive {
-    let scan_root = match workspace_root {
-      Some(value) => value
-      None => cwd
-    }
+  if options.recursive {
+    let scan_root = workspace_root.unwrap_or(options.cwd)
     let discovered : Array[String] = []
     @fs.walk(
       scan_root,
       async fn(directory, _) {
-        if directory.contains("/_build") ||
-          directory.contains("\\_build") ||
-          directory.contains("/.git") ||
-          directory.contains("\\.git") ||
-          directory.contains("/.mooncakes") ||
-          directory.contains("\\.mooncakes") {
-          ()
-        } else {
+        if !is_ignored_dir(directory) {
           let candidate = directory + "/moon.mod"
           if @fs.exists(candidate) {
             discovered.push(candidate)
@@ -1272,399 +460,433 @@ async fn run_cli_inner(
         }
       },
       max_concurrency=1,
-    )
+    ) catch {
+      _ => ()
+    }
     discovered.sort()
     for path in discovered {
       if !manifests.any(item => item.path == path) {
-        let data = @fs.read_file(path) catch { _ => continue }
-        let source = data.binary()
-        let module_name = module_name_from_source(source)
+        let source = @fs.read_binary(path) catch { _ => continue }
+        let module_name = @taze.module_name_from_source(source)
         let parsed = @taze.parse_manifest(source, path~, module_name~)
         match parsed.manifest {
           Some(manifest) => manifests.push(manifest)
           None =>
-            if !json_output && !silent {
-              for diagnostic in parsed.diagnostics {
-                emit("error[\{diagnostic.code}]: \{diagnostic.message}")
+            if !options.json_output && !options.silent {
+              for diag in parsed.diagnostics {
+                emit("error[\{diag.code}]: \{diag.message}")
               }
             }
         }
       }
     }
   }
-  let mut progress_total = 0
-  for manifest in manifests {
-    progress_total += manifest.dependencies.length()
-  }
-  let progress_enabled = match interactive_tty {
-    Some(true) => !json_output && !silent && progress_total > 0
-    _ => false
-  }
-  let progress = progress_bar(progress_total, progress_enabled)
-  progress_bar_start(progress)
-  defer progress_bar_stop(progress)
-  let need_release_times = interactive ||
-    timediff ||
-    sort_mode == "time-asc" ||
-    sort_mode == "time-desc" ||
-    maturity_days > 0 ||
-    mode == @taze.UpdateMode::Newest ||
-    mode == @taze.UpdateMode::Next
-  let detail_times : Map[String, Int64] = Map([])
-  let detail_missing : Map[String, Bool] = Map([])
-  let effective_fetch : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError = name => {
-    defer progress_bar_update(progress, name)
-    let registry_root = "https://mooncakes.io"
-    let key = cache_key(registry_root, name)
-    if !force {
-      match cache.get(key) {
-        Some(value) =>
-          return if need_release_times {
-            enrich_release_times(
-              value, fetch_version, detail_times, detail_missing, retry_count, retry_delay_ms,
-            )
-          } else {
-            value
-          }
-        None =>
-          // Read the old process-local key shape during the transition to
-          // registry-scoped persistent cache entries.
-          match cache.get(name) {
-            Some(value) =>
-              return if need_release_times {
-                enrich_release_times(
-                  value, fetch_version, detail_times, detail_missing, retry_count,
-                  retry_delay_ms,
-                )
-              } else {
-                value
-              }
-            None => ()
-          }
+  // Discover GitHub Actions workflows & composite actions if enabled.
+  if options.github_actions {
+    let gha_root = workspace_root.unwrap_or(config_root)
+    let gha_paths = discover_github_actions_paths(
+      gha_root,
+      recursive=options.recursive,
+    )
+    for path in gha_paths {
+      let source = @fs.read_binary(path) catch { _ => continue }
+      let parsed = @taze.parse_github_actions_manifest(source, path~)
+      if parsed.manifest is Some(manifest) && !manifest.dependencies.is_empty() {
+        manifests.push(manifest)
       }
     }
-    let value = fetch_with_retries(
-      fetch~,
-      name,
-      retry_count,
+  }
+  if manifests.is_empty() {
+    match find_legacy_manifest(options.cwd) {
+      Some(path) =>
+        cli_error(
+          "unsupported_manifest: moon.mod.json is not supported at \{path}",
+        )
+      None => cli_error("no_manifest: no moon.mod found from \{options.cwd}")
+    }
+  }
+  let unique_targets : Map[String, Unit] = Map([])
+  for manifest in manifests {
+    for dep in manifest.dependencies {
+      let tag = match dep.source {
+        GitHubActions => "gha:" + dep.name
+        _ => "mc:" + dep.name
+      }
+      unique_targets[tag] = ()
+    }
+  }
+  let progress_total = unique_targets.length()
+  let progress_enabled = match interactive_tty {
+    Some(true) => !options.json_output && !options.silent && progress_total > 0
+    _ => false
+  }
+  let use_color = match color {
+    Some(flag) => flag && !options.json_output
+    None =>
+      !options.json_output && should_use_color(interactive_tty.unwrap_or(false))
+  }
+  let style = Style::new(use_color)
+  let progress = progress_bar(progress_total, progress_enabled, color=use_color)
+  progress_bar_start(progress)
+  defer @async.protect_from_cancel(() => progress_bar_stop(progress))
+  let need_release_times = options.sort_mode == "time-asc" ||
+    options.sort_mode == "time-desc" ||
+    options.maturity_days > 0 ||
+    options.mode == Newest ||
+    options.mode == Next
+  let detail_times : Map[String, Int64] = Map([])
+  let detail_missing : Map[String, Bool] = Map([])
+  if !options.force {
+    seed_detail_times_from_cache(cache, detail_times)
+  }
+  let cache_dirty = Ref(false)
+  let effective_fetch : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError = name => {
+    defer (@async.protect_from_cancel(() => progress_bar_update(progress, name)) catch {
+      _ => ()
+    })
+    let registry_root = "https://mooncakes.io"
+    let key = mooncakes_cache_key(registry_root, name)
+    if !options.force {
+      let cached = match cache.get(key) {
+        Some(value) => Some(value)
+        None => cache.get(name)
+      }
+      if cached is Some(value) {
+        return if need_release_times {
+          enrich_release_times(
+            value,
+            fetch_version,
+            detail_times,
+            detail_missing,
+            options.retry_count,
+            retry_delay_ms,
+          )
+        } else {
+          value
+        }
+      }
+    }
+    let value = @taze.retry_registry(
+      retries=options.retry_count,
       delay_ms=retry_delay_ms,
+      () => fetch(name),
     )
     let enriched = if need_release_times {
       enrich_release_times(
-        value, fetch_version, detail_times, detail_missing, retry_count, retry_delay_ms,
+        value,
+        fetch_version,
+        detail_times,
+        detail_missing,
+        options.retry_count,
+        retry_delay_ms,
       )
     } else {
       value
     }
     cache[key] = enriched
     cache_times[key] = @env.now()
+    cache_dirty.val = true
+    enriched
+  }
+  let effective_fetch_gha : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError = repo => {
+    defer (@async.protect_from_cancel(() => progress_bar_update(progress, repo)) catch {
+      _ => ()
+    })
+    let key = gha_cache_key(repo)
+    if !options.force && cache.get(key) is Some(value) {
+      return if need_release_times {
+        enrich_gha_release_times(
+          value,
+          fetch_gha_commit_date,
+          detail_times,
+          detail_missing,
+          options.retry_count,
+          retry_delay_ms,
+        )
+      } else {
+        value
+      }
+    }
+    let value = @taze.retry_registry(
+      retries=options.retry_count,
+      delay_ms=retry_delay_ms,
+      () => fetch_gha(repo),
+    )
+    let enriched = if need_release_times {
+      enrich_gha_release_times(
+        value,
+        fetch_gha_commit_date,
+        detail_times,
+        detail_missing,
+        options.retry_count,
+        retry_delay_ms,
+      )
+    } else {
+      value
+    }
+    cache[key] = enriched
+    cache_times[key] = @env.now()
+    cache_dirty.val = true
+    enriched
+  }
+  let release = @taze.ReleaseOptions(
+    @env.now().reinterpret_as_int64(),
+    options.maturity_days,
+    maturity_exclude=options.maturity_exclude,
+  )
+  let check_options = @taze.CheckOptions(
+    mode=options.mode,
+    include_selectors=options.include_selectors,
+    exclude_selectors=options.exclude_selectors,
+    local_modules~,
+    release~,
+    gha_style=options.github_actions_style,
+    cwd=options.cwd,
+  )
+  let plan = @taze.check_manifests(
+    manifests,
+    options=check_options,
+    fetch=effective_fetch,
+    fetch_gha=effective_fetch_gha,
+  )
+  if cache_dirty.val {
     save_persistent_cache(cache_path, cache, cache_times) catch {
       _ => ()
     }
-    enriched
-  }
-  let release_options = @taze.ReleaseOptions::ReleaseOptions(
-    @env.now().reinterpret_as_int64(),
-    maturity_days,
-    maturity_exclude~,
-  )
-  let plan = @taze.check_manifests_timed_filtered(
-    manifests,
-    local_modules,
-    mode~,
-    include~,
-    exclude~,
-    options=release_options,
-    cwd~,
-    fetch=effective_fetch,
-  )
-  progress_bar_stop(progress)
-  if !json_output && !silent {
-    for diagnostic in plan.diagnostics() {
-      let level = match diagnostic.severity {
-        Warning => "warning"
-        Error => "error"
-      }
-      emit("\{level}[\{diagnostic.code}]: \{diagnostic.message}")
-    }
+    cache_dirty.val = false
   }
   let extra_diagnostics : Array[@taze.Diagnostic] = []
-  // Display ages without fetching the entire version history. Missing release
-  // details must not prevent an otherwise valid preview or update.
-  if !json_output && !silent && !interactive {
+  // Lazily and concurrently fetch display ages ONLY for displayed current/target
+  // versions not already present in cache, keeping the progress bar live.
+  let fetch_display_ages = options.timediff &&
+    (!options.silent || options.json_output)
+  if fetch_display_ages {
+    let age_tasks : Array[AgeFetchTask] = []
+    let age_seen : Map[String, Unit] = Map([])
     for change in plan.changes() {
-      if change.status is UpdateAvailable ||
-        (show_all && change.status is UpToDate) {
-        let versions = [change.dependency.version]
-        if change.target is Some(target) && !versions.contains(target) {
-          versions.push(target)
-        }
-        for version in versions {
-          let key = change.dependency.name + "@" + version
-          if !detail_times.contains(key) && !detail_missing.contains(key) {
-            let detail = fetch_version_with_retries(
-              fetch_version~,
-              change.dependency.name,
-              version,
-              retry_count,
-              retry_delay_ms,
-            ) catch {
-              _ => None
-            }
-            match detail {
-              Some(value) if value.published_at is Some(time) =>
-                detail_times[key] = time
-              _ => detail_missing[key] = true
+      let should_display = change.status is UpdateAvailable ||
+        (options.show_all && change.status is UpToDate)
+      if !should_display {
+        continue
+      }
+      match change.dependency.source {
+        Mooncakes => {
+          let versions = [change.dependency.version]
+          if change.target is Some(target) && !versions.contains(target) {
+            versions.push(target)
+          }
+          for version in versions {
+            let key = change.dependency.name + "@" + version
+            if !detail_times.contains(key) &&
+              !detail_missing.contains(key) &&
+              !age_seen.contains(key) {
+              age_seen[key] = ()
+              age_tasks.push(MooncakesAge(change.dependency.name, version))
             }
           }
+        }
+        GitHubActions =>
+          if change.target is Some(target) && change.target_sha is Some(sha) {
+            let key = change.dependency.name + "@" + target
+            if !detail_times.contains(key) &&
+              !detail_missing.contains(key) &&
+              !age_seen.contains(key) {
+              age_seen[key] = ()
+              age_tasks.push(GitHubAge(change.dependency.name, target, sha))
+            }
+          }
+        _ => ()
+      }
+    }
+    if !age_tasks.is_empty() {
+      progress_bar_set_phase(progress, "age", age_tasks.length())
+      let age_retries = if options.retry_count > 1 {
+        1
+      } else {
+        options.retry_count
+      }
+      let sem = @async.Semaphore(8)
+      @async.with_task_group(group => {
+        for task in age_tasks {
+          group.spawn_bg(async fn() {
+            sem.acquire()
+            defer sem.release()
+            match task {
+              MooncakesAge(name, version) => {
+                let key = name + "@" + version
+                defer (@async.protect_from_cancel(() => {
+                  progress_bar_update(progress, key)
+                }) catch {
+                  _ => ()
+                })
+                let detail = @taze.retry_registry(
+                  retries=age_retries,
+                  delay_ms=retry_delay_ms,
+                  () => fetch_version(name, version),
+                ) catch {
+                  _ => None
+                }
+                match detail {
+                  Some(value) if value.published_at is Some(time) =>
+                    detail_times[key] = time
+                  _ => detail_missing[key] = true
+                }
+              }
+              GitHubAge(repo, target, sha) => {
+                let key = repo + "@" + target
+                defer (@async.protect_from_cancel(() => {
+                  progress_bar_update(progress, key)
+                }) catch {
+                  _ => ()
+                })
+                let ts = @taze.retry_registry(
+                  retries=age_retries,
+                  delay_ms=retry_delay_ms,
+                  () => fetch_gha_commit_date(repo, sha),
+                ) catch {
+                  _ => None
+                }
+                match ts {
+                  Some(time) => detail_times[key] = time
+                  None => detail_missing[key] = true
+                }
+              }
+            }
+          })
+        }
+      }) catch {
+        _ => ()
+      }
+      if apply_detail_times_to_cache(cache, detail_times) {
+        save_persistent_cache(cache_path, cache, cache_times) catch {
+          _ => ()
         }
       }
     }
   }
-  if timediff {
-    for change in plan.changes() {
-      match change.target {
-        Some(target) => {
-          let current_key = change.dependency.name +
-            "@" +
-            change.dependency.version
-          let target_key = change.dependency.name + "@" + target
-          if !detail_times.contains(current_key) ||
-            !detail_times.contains(target_key) {
-            extra_diagnostics.push(
-              @taze.warning_diagnostic(
-                "unknown_release_time",
-                "current or target release time is unavailable for timediff",
-                Some(change.dependency.manifest),
-                Some(change.dependency.name),
-                Some(change.dependency.span.line),
-                Some(change.dependency.span.column),
-              ),
-            )
-          }
-        }
-        None => ()
-      }
-    }
-  }
-  if !json_output && !silent {
-    for diagnostic in extra_diagnostics {
-      emit("warning[\{diagnostic.code}]: \{diagnostic.message}")
-    }
-  }
-  let changes = sort_changes(
-    plan.changes(),
-    sort_mode,
-    published_at=detail_times,
+  progress_bar_stop(progress)
+  let display_now = now_ms.unwrap_or(@env.now().reinterpret_as_int64())
+  render_text_report(
+    manifests,
+    plan,
+    options,
+    detail_times,
+    extra_diagnostics,
+    style,
+    now=display_now,
+    emit~,
   )
-  let mut grouped_manifest : String? = None
-  for change in changes {
-    if json_output || silent || interactive {
-      continue
-    }
-    if group_output && grouped_manifest != Some(change.dependency.manifest) {
-      grouped_manifest = Some(change.dependency.manifest)
-      emit("[\{change.dependency.manifest}]")
-    }
-    match change.status {
-      UpdateAvailable => {
-        let target = change.target.unwrap_or("?")
-        let mode_text = mode_name(change.mode)
-        let current_age = format_release_age(
-          detail_times.get(
-            change.dependency.name + "@" + change.dependency.version,
-          ),
-        )
-        let target_age = format_release_age(
-          detail_times.get(change.dependency.name + "@" + target),
-        )
-        let timediff_text = if timediff {
-          let current = detail_times.get(
-            change.dependency.name + "@" + change.dependency.version,
-          )
-          let target_time = detail_times.get(
-            change.dependency.name + "@" + target,
-          )
-          " timediff=\{format_time_diff(current, target_time)}"
-        } else {
-          ""
-        }
-        emit(
-          "\{change.dependency.name} \{change.dependency.version} -> \{target} (\{mode_text}) [age: \{current_age} -> \{target_age}]\{timediff_text}",
-        )
-      }
-      UpToDate =>
-        if show_all {
-          let age = format_release_age(
-            detail_times.get(
-              change.dependency.name + "@" + change.dependency.version,
-            ),
-          )
-          emit(
-            "\{change.dependency.name} \{change.dependency.version} up-to-date [age: \{age}]",
-          )
-        }
-      NoCandidate => emit("\{change.dependency.name} no candidate")
-      Skipped =>
-        if show_all {
-          let reason = change.reason.unwrap_or("filtered")
-          emit("\{change.dependency.name} skipped (\{reason})")
-        }
-      Error => ()
-    }
-  }
-  if !json_output &&
-    !silent &&
-    !interactive &&
-    !write &&
-    changes.any(change => change.status is UpdateAvailable) {
-    emit("Run with --write (or -w) to apply these updates.")
-  }
   if plan.has_errors() {
-    if json_output {
+    if options.json_output {
       emit(
         render_json(
           plan,
-          mode,
+          options.mode,
           None,
           [],
-          fail_on_outdated,
+          options.fail_on_outdated,
           published_at=detail_times,
           extra_diagnostics~,
         ),
       )
-      return 2
     }
-    cli_error("check failed")
+    return 2
   }
-  let mut interactive_selection_result : @taze.Selection? = None
-  if interactive {
-    match interactive_selection_tui(plan, emit~, detail_times) {
-      Some(selection) => {
-        interactive_selection_result = Some(selection)
-        write = true
-      }
-      None => return 0
-    }
-  }
-  if write {
-    let selection = interactive_selection_result.unwrap_or(
-      plan.recommended_selection(),
-    )
-    let report = @taze.apply(plan, selection)
+  if options.write {
+    let report = @taze.apply(plan, plan.recommended_selection())
     let verification : Array[VerificationResult] = []
-    if verify && report.status() == Succeeded && report.written_files() > 0 {
-      let verify_emit : (String) -> Unit = if json_output {
+    if options.verify &&
+      report.status() == Succeeded &&
+      report.written_files() > 0 {
+      let verify_emit : (String) -> Unit = if options.json_output {
         _ => ()
       } else {
         emit
       }
-      match workspace_root {
-        Some(root) => {
-          let passed = verify_directory(root, emit=verify_emit)
-          verification.push({
-            path: root,
-            passed,
-            exit_code: if passed {
-              0
-            } else {
-              2
-            },
-          })
-        }
-        None => {
-          let directories : Array[String] = []
-          for file in report.files() {
-            if file.status() == Written {
-              let directory = parent_path(file.manifest()).unwrap_or(cwd)
-              if !directories.contains(directory) {
-                directories.push(directory)
-              }
-            }
+      let written_moon_dirs : Array[String] = []
+      for file in report.files() {
+        if file.status() == Written &&
+          !@taze.is_github_actions_path(file.manifest()) {
+          let directory = parent_path(file.manifest()).unwrap_or(options.cwd)
+          if !written_moon_dirs.contains(directory) {
+            written_moon_dirs.push(directory)
           }
-          directories.sort()
-          for directory in directories {
-            let passed = verify_directory(directory, emit=verify_emit)
-            verification.push({
-              path: directory,
-              passed,
-              exit_code: if passed {
-                0
-              } else {
-                2
-              },
-            })
+        }
+      }
+      if !written_moon_dirs.is_empty() {
+        match workspace_root {
+          Some(root) =>
+            verification.push(verify_directory(root, emit=verify_emit))
+          None => {
+            written_moon_dirs.sort()
+            for directory in written_moon_dirs {
+              verification.push(verify_directory(directory, emit=verify_emit))
+            }
           }
         }
       }
     }
-    if json_output {
+    if options.json_output {
       emit(
         render_json(
           plan,
-          mode,
+          options.mode,
           Some(report),
           verification,
-          fail_on_outdated,
+          options.fail_on_outdated,
           published_at=detail_times,
           extra_diagnostics~,
         ),
       )
-      if report.exit_code() != 0 || verification.any(item => !item.passed) {
-        return 2
-      }
-      if fail_on_outdated &&
-        plan.changes().any(item => item.status is UpdateAvailable) {
-        return 1
-      }
-      return 0
-    }
-    if !silent {
-      for diagnostic in report.diagnostics {
-        emit("error[\{diagnostic.code}]: \{diagnostic.message}")
-      }
-      for file in report.files {
-        let status = match file.status {
-          Written => "written"
-          Unchanged => "unchanged"
-          Failed => "failed"
-          NotAttempted => "not_attempted"
+    } else if !options.silent {
+      if !report.diagnostics().is_empty() {
+        emit(style.inverse_red_bold(" ERROR "))
+        emit("")
+        for diag in report.diagnostics() {
+          emit(style.red("> [\{diag.code}] \{diag.message}"))
         }
-        emit(
-          "\{status}: \{file.manifest} (\{file.changed_dependencies} dependencies)",
-        )
+        emit("")
+      } else if report.written_files() > 0 {
+        let files_label = target_files_label(manifests, plan.changes())
+        let has_moon_written = report
+          .files()
+          .any(f => {
+            f.status() == Written && !@taze.is_github_actions_path(f.manifest())
+          })
+        if !options.verify && has_moon_written {
+          emit(
+            style.yellow("ℹ changes written to \{files_label}, run ") +
+            style.cyan("moon check") +
+            style.yellow(" to verify."),
+          )
+        } else {
+          emit(style.yellow("ℹ changes written to \{files_label}"))
+        }
       }
-      let status = match report.status {
-        Succeeded => "succeeded"
-        Failed => "failed"
-        Partial => "partial"
-        Cancelled => "cancelled"
-      }
-      emit("apply \{status}: \{report.written_files()} files written")
     }
     if report.exit_code() != 0 || verification.any(item => !item.passed) {
       return 2
     }
-    if fail_on_outdated &&
+    if options.fail_on_outdated &&
       plan.changes().any(item => item.status is UpdateAvailable) {
       return 1
     }
     return 0
   }
-  if json_output {
+  if options.json_output {
     emit(
       render_json(
         plan,
-        mode,
+        options.mode,
         None,
         [],
-        fail_on_outdated,
+        options.fail_on_outdated,
         published_at=detail_times,
         extra_diagnostics~,
       ),
     )
   }
-  if fail_on_outdated &&
+  if options.fail_on_outdated &&
     plan.changes().any(item => item.status is UpdateAvailable) {
     1
   } else {
@@ -1692,7 +914,10 @@ async fn main {
     cache_path~,
     retry_delay_ms=1000,
     fetch_version=fetch_mooncakes_version_cli,
+    fetch_gha=default_gha_fetch_cli,
+    fetch_gha_commit_date=default_gha_commit_date_cli,
     interactive_tty=Some(interactive_terminal_available()),
+    color=Some(should_use_color(stdout_terminal_available())),
   )
   if code != 0 {
     terminate_process(code)

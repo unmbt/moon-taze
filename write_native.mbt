@@ -1,6 +1,6 @@
 ///|
 #borrow(path)
-extern "C" fn native_inspect(path : Bytes) -> Int = "moon_taze_inspect"
+extern "C" fn native_inspect(path : Bytes) -> Int32 = "moon_taze_inspect"
 
 ///|
 #borrow(path)
@@ -12,17 +12,20 @@ extern "C" fn native_create(path : Bytes) -> Bytes = "moon_taze_create"
 
 ///|
 #borrow(source, temporary)
-extern "C" fn native_copy_permissions(source : Bytes, temporary : Bytes) -> Int = "moon_taze_copy_permissions"
+extern "C" fn native_copy_permissions(
+  source : Bytes,
+  temporary : Bytes,
+) -> Int32 = "moon_taze_copy_permissions"
 
 ///|
 #borrow(temporary, destination)
-extern "C" fn native_replace(temporary : Bytes, destination : Bytes) -> Int = "moon_taze_replace"
+extern "C" fn native_replace(temporary : Bytes, destination : Bytes) -> Int32 = "moon_taze_replace"
 
 ///|
-extern "C" fn native_process_id() -> Int = "moon_taze_process_id"
+extern "C" fn native_process_id() -> Int32 = "moon_taze_process_id"
 
 ///|
-let write_serial : Ref[Int] = Ref(0)
+let write_serial : Ref[Int32] = Ref(0)
 
 ///|
 fn native_path(path : String) -> Bytes raise {
@@ -33,7 +36,7 @@ fn native_path(path : String) -> Bytes raise {
 }
 
 ///|
-fn check_native_result(code : Int, operation : String) -> Unit raise {
+fn check_native_result(code : Int32, operation : String) -> Unit raise {
   if code == -1 {
     write_error(
       "unsafe_write_target",
@@ -65,7 +68,7 @@ fn native_write_services() -> WriteServices {
     inspect: path => {
       check_native_result(native_inspect(native_path(path)), path)
     },
-    read: path => @fs.read_file(path).binary(),
+    read: path => @fs.read_binary(path),
     create: path => {
       let identity = native_create(native_path(path))
       let result = @utf8.decode_lossy(identity)
@@ -84,7 +87,7 @@ fn native_write_services() -> WriteServices {
     },
     write_lock: (file, token) => {
       require_owned(file)
-      @fs.write_file(file.path, token, create_mode=OpenExisting, sync=Full)
+      @fs.write_binary(file.path, token, create_mode=OpenExisting, sync=Full)
     },
     stage: (source, file, content) => {
       require_owned(file)
@@ -92,7 +95,7 @@ fn native_write_services() -> WriteServices {
         native_copy_permissions(native_path(source), native_path(file.path)),
         "copy permissions for \{source}",
       )
-      @fs.write_file(
+      @fs.write_binary(
         file.path,
         content,
         create_mode=TruncateExisting,
