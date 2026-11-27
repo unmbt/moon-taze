@@ -200,6 +200,16 @@ async test "CLI interactive cancel and write decline leave manifests untouched" 
 }
 
 ///|
+async fn wait_until(cond : () -> Bool, timeout_ms~ : Int32 = 5000) -> Bool {
+  let mut elapsed = 0
+  while !cond() && elapsed < timeout_ms {
+    @async.sleep(5)
+    elapsed += 5
+  }
+  cond()
+}
+
+///|
 async test "CLI interactive version picker renders immediately with progress bar, updates live, and stays non-blocking" {
   let root = @fs.tmpdir(prefix="moon-taze-cli-tui-nonblocking")
   defer @fs.remove(root, recursive=true)
@@ -209,6 +219,10 @@ async test "CLI interactive version picker renders immediately with progress bar
   )
   let frames : Array[String] = []
   let fetched : Array[String] = []
+  let gate_110 = @async.Semaphore(1)
+  let gate_200 = @async.Semaphore(1)
+  gate_110.acquire()
+  gate_200.acquire()
   let ct = @clack_term.CallbackTerminal(
     on_write=chunk => frames.push(chunk.to_owned()),
     cols=100,
@@ -234,12 +248,12 @@ async test "CLI interactive version picker renders immediately with progress bar
         fetch_version=(name, version) => {
           fetched.push(name + "@" + version)
           if version == "1.1.0" {
-            @async.sleep(60)
+            gate_110.acquire()
             Some(
               @taze.VersionMetadata(version, false, None, Some(now - 12L * day)),
             )
           } else if version == "2.0.0" {
-            @async.sleep(250)
+            gate_200.acquire()
             Some(
               @taze.VersionMetadata(version, false, None, Some(now - 3L * day)),
             )
@@ -255,22 +269,28 @@ async test "CLI interactive version picker renders immediately with progress bar
         session=Some(session),
       )
     })
-    // Wait briefly for initial list view, then press Right to open version picker.
-    @async.sleep(30)
+    // Deterministically wait for the initial list view before sending Right.
+    assert_true(wait_until(() => frames.join("").contains("to change version")))
     ct.push_input(b"\x1b[C")
-    // Immediately (within 25ms, before 60ms/250ms fetches finish) picker + 0/2 progress bar appear!
-    @async.sleep(25)
-    let snap_early = frames.join("")
-    assert_true(snap_early.contains("Select a version for acme/lib"))
-    assert_true(snap_early.contains("age "))
-    assert_true(snap_early.contains("0/2"))
-    // Wait 70ms: fast 1.1.0 (60ms) finishes and redraws live with 1/2 + ~12d while 2.0.0 (250ms) is still loading!
-    @async.sleep(70)
-    let snap_mid = frames.join("")
-    assert_true(snap_mid.contains("1/2"))
-    assert_true(snap_mid.contains("~12d"))
+    // Both 1.1.0 and 2.0.0 are blocked on semaphores, yet version picker + 0/2 progress bar MUST render immediately.
+    assert_true(
+      wait_until(() => {
+        let s = frames.join("")
+        s.contains("Select a version for acme/lib") &&
+        s.contains("age ") &&
+        s.contains("0/2")
+      }),
+    )
+    // Release only 1.1.0: picker must live-redraw 1/2 + ~12d while 2.0.0 stays blocked.
+    gate_110.release()
+    assert_true(
+      wait_until(() => {
+        let s = frames.join("")
+        s.contains("1/2") && s.contains("~12d")
+      }),
+    )
     assert_true(fetched.contains("acme/lib@1.1.0"))
-    // User can immediately move down to 2.0.0 and confirm without waiting for 2.0.0's 250ms fetch!
+    // While 2.0.0 is STILL blocked, user can move down to 2.0.0 and confirm immediately.
     ct.push_input(b"\x1b[B")
     ct.push_input(b"\r")
     ct.push_input(b"\r")

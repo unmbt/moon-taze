@@ -38,7 +38,7 @@ async fn main {
       (["patch", "-C", root, "-w"], 0),
       (["--unknown"], 2),
       (["-I", "-C", root], 2),
-      (["--interactive", "--json", "-C", root], 2),
+      (["--interactive", "--json", "-C", root], 0),
       (["-C", root, "-w", "--verify"], 0),
     ] {
     let (arguments, expected) = item
