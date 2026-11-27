@@ -185,6 +185,7 @@ pub struct DependencyChange {
   target_sha : String?
   latest_available : String?
   candidates : Array[String]
+  candidate_shas : Map[String, String]
   diff : DiffKind?
   reason : String?
   diagnostics : Array[Diagnostic]
@@ -485,10 +486,50 @@ pub suberror ResolveError {
 
 ///|
 fn copy_change(change : DependencyChange) -> DependencyChange {
+  let candidate_shas : Map[String, String] = Map([])
+  for k, v in change.candidate_shas {
+    candidate_shas[k] = v
+  }
   {
     ..change,
     candidates: change.candidates.copy(),
+    candidate_shas,
     diagnostics: change.diagnostics.copy(),
+  }
+}
+
+///|
+/// Return a detached display copy of a `DependencyChange` with an interactive
+/// target override (does not mutate the live `CheckPlan`).
+pub fn DependencyChange::with_target(
+  self : DependencyChange,
+  target : String,
+  target_sha~ : String? = None,
+  diff~ : DiffKind? = None,
+) -> DependencyChange {
+  {
+    ..copy_change(self),
+    status: UpdateAvailable,
+    target: Some(target),
+    target_sha,
+    diff,
+    reason: None,
+  }
+}
+
+///|
+/// Return a detached display copy marked as skipped with a custom reason.
+pub fn DependencyChange::as_skipped(
+  self : DependencyChange,
+  reason : String,
+) -> DependencyChange {
+  {
+    ..copy_change(self),
+    status: Skipped,
+    target: None,
+    target_sha: None,
+    diff: None,
+    reason: Some(reason),
   }
 }
 

@@ -303,6 +303,8 @@ async fn run_cli(
   interactive_tty~ : Bool? = None,
   color~ : Bool? = None,
   now_ms~ : Int64? = None,
+  session~ : @clack_prompts.Session? = None,
+  run_verify~ : (async (String, (String) -> Unit) -> VerificationResult)? = None,
 ) -> Int32 {
   run_cli_inner(
     args,
@@ -318,6 +320,8 @@ async fn run_cli(
     interactive_tty,
     color,
     now_ms,
+    session,
+    run_verify,
   ) catch {
     CliError(code~, message~) => {
       if args.any(item => item == "--json") {
@@ -353,6 +357,8 @@ async fn run_cli_inner(
   interactive_tty : Bool?,
   color : Bool?,
   now_ms : Int64?,
+  session : @clack_prompts.Session?,
+  run_verify : (async (String, (String) -> Unit) -> VerificationResult)?,
 ) -> Int32 {
   let options = match parse_cli_args(args) {
     Help(text) => {
@@ -387,8 +393,44 @@ async fn run_cli_inner(
       }
   }
   merge_config(options, config_root, emit~)
-  if options.verify && !options.write {
-    cli_error("invalid_option: --verify requires --write")
+  if options.verify && !options.write && !options.interactive {
+    cli_error("invalid_option: --verify requires --write or --interactive")
+  }
+  let effective_interactive = options.interactive && !options.json_output
+  let use_color = match color {
+    Some(flag) => flag && !options.json_output
+    None =>
+      !options.json_output && should_use_color(interactive_tty.unwrap_or(false))
+  }
+  let interactive_session : @clack_prompts.Session? = if effective_interactive {
+    match session {
+      Some(s) => {
+        if !s.is_interactive() {
+          cli_error(
+            "interactive mode (-I/--interactive) requires an interactive terminal",
+            code="not_interactive",
+          )
+        }
+        Some(s)
+      }
+      None => {
+        let color_level : @clack_ansi.ColorLevel = if use_color {
+          Ansi16
+        } else {
+          None
+        }
+        let s = @clack_prompts.Session(color_level~, non_interactive=Fail)
+        if !interactive_tty.unwrap_or(false) || !s.is_interactive() {
+          cli_error(
+            "interactive mode (-I/--interactive) requires an interactive terminal",
+            code="not_interactive",
+          )
+        }
+        Some(s)
+      }
+    }
+  } else {
+    None
   }
   for selector in options.maturity_exclude {
     if !@taze.selector_valid(selector) {
@@ -519,11 +561,6 @@ async fn run_cli_inner(
   let progress_enabled = match interactive_tty {
     Some(true) => !options.json_output && !options.silent && progress_total > 0
     _ => false
-  }
-  let use_color = match color {
-    Some(flag) => flag && !options.json_output
-    None =>
-      !options.json_output && should_use_color(interactive_tty.unwrap_or(false))
   }
   let style = Style::new(use_color)
   let progress = progress_bar(progress_total, progress_enabled, color=use_color)
@@ -664,7 +701,11 @@ async fn run_cli_inner(
     let age_tasks : Array[AgeFetchTask] = []
     let age_seen : Map[String, Unit] = Map([])
     for change in plan.changes() {
+      let interactive_latest = effective_interactive &&
+        change.status is NoCandidate &&
+        change.latest_available is Some(_)
       let should_display = change.status is UpdateAvailable ||
+        interactive_latest ||
         (options.show_all && change.status is UpToDate)
       if !should_display {
         continue
@@ -674,6 +715,11 @@ async fn run_cli_inner(
           let versions = [change.dependency.version]
           if change.target is Some(target) && !versions.contains(target) {
             versions.push(target)
+          }
+          if interactive_latest &&
+            change.latest_available is Some(latest) &&
+            !versions.contains(latest) {
+            versions.push(latest)
           }
           for version in versions {
             let key = change.dependency.name + "@" + version
@@ -685,8 +731,18 @@ async fn run_cli_inner(
             }
           }
         }
-        GitHubActions =>
+        GitHubActions => {
+          let gha_targets : Array[(String, String)] = []
           if change.target is Some(target) && change.target_sha is Some(sha) {
+            gha_targets.push((target, sha))
+          }
+          if interactive_latest &&
+            change.latest_available is Some(latest) &&
+            change.candidate_shas.get(latest) is Some(sha) {
+            gha_targets.push((latest, sha))
+          }
+          for item in gha_targets {
+            let (target, sha) = item
             let key = change.dependency.name + "@" + target
             if !detail_times.contains(key) &&
               !detail_missing.contains(key) &&
@@ -695,6 +751,7 @@ async fn run_cli_inner(
               age_tasks.push(GitHubAge(change.dependency.name, target, sha))
             }
           }
+        }
         _ => ()
       }
     }
@@ -766,17 +823,17 @@ async fn run_cli_inner(
   }
   progress_bar_stop(progress)
   let display_now = now_ms.unwrap_or(@env.now().reinterpret_as_int64())
-  render_text_report(
-    manifests,
-    plan,
-    options,
-    detail_times,
-    extra_diagnostics,
-    style,
-    now=display_now,
-    emit~,
-  )
   if plan.has_errors() {
+    render_text_report(
+      manifests,
+      plan,
+      options,
+      detail_times,
+      extra_diagnostics,
+      style,
+      now=display_now,
+      emit~,
+    )
     if options.json_output {
       emit(
         render_json(
@@ -792,6 +849,169 @@ async fn run_cli_inner(
     }
     return 2
   }
+  if interactive_session is Some(active_session) {
+    let outcome = run_interactive_picker(
+      manifests, plan, options, detail_times, detail_missing, cache, cache_times,
+      cache_path, fetch_version, fetch_gha_commit_date, retry_delay_ms, style, display_now,
+      active_session,
+    ) catch {
+      @clack_term.TermError::NotInteractive(msg) => {
+        cli_error(msg, code="not_interactive")
+        Cancelled
+      }
+      @clack_term.TermError::EndOfInput => Cancelled
+      @clack_term.TermError::IoFailure(msg) => {
+        cli_error(msg, code="tty_error")
+        Cancelled
+      }
+    }
+    match outcome {
+      NoCandidates => {
+        render_text_report(
+          manifests,
+          plan,
+          options,
+          detail_times,
+          extra_diagnostics,
+          style,
+          now=display_now,
+          emit~,
+        )
+        return 0
+      }
+      Cancelled => return 0
+      Confirmed(picked) => {
+        if picked.selected_tuples.is_empty() {
+          if !options.silent {
+            emit(style.green("dependencies are already up-to-date"))
+          }
+          return 0
+        }
+        render_changes_report(
+          manifests,
+          picked.display_changes,
+          plan.diagnostics(),
+          false,
+          options,
+          detail_times,
+          extra_diagnostics,
+          style,
+          now=display_now,
+          show_footer_tips=false,
+          emit~,
+        )
+        let files_label = target_files_label(manifests, picked.display_changes)
+        let should_write = if options.write {
+          true
+        } else {
+          let confirm_res = @clack_prompts.confirm(
+            "write to \{files_label}?",
+            initial_value=true,
+            session=active_session,
+          ) catch {
+            _ => Cancelled
+          }
+          match confirm_res {
+            Submitted(true) => true
+            Submitted(false) => {
+              if !options.silent {
+                emit("")
+                if options.mode == Default {
+                  let cmd_hint = style.cyan("moon-taze major")
+                  emit("Run \{cmd_hint} to check major updates")
+                }
+                let write_flag = style.green("-w")
+                emit("Add \{write_flag} to write to \{files_label}")
+                emit("")
+              }
+              return if options.fail_on_outdated { 1 } else { 0 }
+            }
+            Cancelled | StepBack => return 0
+          }
+        }
+        if !should_write {
+          return if options.fail_on_outdated { 1 } else { 0 }
+        }
+        let report = @taze.apply(plan, plan.selection(picked.selected_tuples))
+        if !options.silent {
+          if !report.diagnostics().is_empty() {
+            emit(style.inverse_red_bold(" ERROR "))
+            emit("")
+            for diag in report.diagnostics() {
+              emit(style.red("> [\{diag.code}] \{diag.message}"))
+            }
+            emit("")
+          } else if report.written_files() > 0 {
+            emit(style.yellow("ℹ changes written to \{files_label}"))
+          }
+        }
+        let verification : Array[VerificationResult] = []
+        if report.status() == Succeeded && report.written_files() > 0 {
+          let written_moon_dirs : Array[String] = []
+          for file in report.files() {
+            if file.status() == Written &&
+              !@taze.is_github_actions_path(file.manifest()) {
+              let directory = parent_path(file.manifest()).unwrap_or(
+                options.cwd,
+              )
+              if !written_moon_dirs.contains(directory) {
+                written_moon_dirs.push(directory)
+              }
+            }
+          }
+          if !written_moon_dirs.is_empty() {
+            let should_verify = if options.verify {
+              true
+            } else {
+              let verify_res = @clack_prompts.confirm(
+                "run moon check now?",
+                initial_value=true,
+                session=active_session,
+              ) catch {
+                _ => Cancelled
+              }
+              match verify_res {
+                Submitted(true) => true
+                _ => false
+              }
+            }
+            if should_verify {
+              let verify_fn = match run_verify {
+                Some(f) => f
+                None => async fn(dir, out) { verify_directory(dir, emit=out) }
+              }
+              match workspace_root {
+                Some(root) => verification.push(verify_fn(root, emit))
+                None => {
+                  written_moon_dirs.sort()
+                  for directory in written_moon_dirs {
+                    verification.push(verify_fn(directory, emit))
+                  }
+                }
+              }
+            }
+          }
+        }
+        if report.exit_code() != 0 || verification.any(item => !item.passed) {
+          return 2
+        }
+        if options.fail_on_outdated {
+          return 1
+        }
+        return 0
+      }
+    }
+  }
+  render_text_report(
+    manifests,
+    plan,
+    options,
+    detail_times,
+    extra_diagnostics,
+    style,
+    now=display_now,
+    emit~,
+  )
   if options.write {
     let report = @taze.apply(plan, plan.recommended_selection())
     let verification : Array[VerificationResult] = []
@@ -802,6 +1022,10 @@ async fn run_cli_inner(
         _ => ()
       } else {
         emit
+      }
+      let verify_fn = match run_verify {
+        Some(f) => f
+        None => async fn(dir, out) { verify_directory(dir, emit=out) }
       }
       let written_moon_dirs : Array[String] = []
       for file in report.files() {
@@ -815,12 +1039,11 @@ async fn run_cli_inner(
       }
       if !written_moon_dirs.is_empty() {
         match workspace_root {
-          Some(root) =>
-            verification.push(verify_directory(root, emit=verify_emit))
+          Some(root) => verification.push(verify_fn(root, verify_emit))
           None => {
             written_moon_dirs.sort()
             for directory in written_moon_dirs {
-              verification.push(verify_directory(directory, emit=verify_emit))
+              verification.push(verify_fn(directory, verify_emit))
             }
           }
         }

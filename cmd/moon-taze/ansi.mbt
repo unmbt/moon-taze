@@ -44,6 +44,11 @@ fn Style::green(self : Style, text : String) -> String {
 }
 
 ///|
+fn Style::bold_green(self : Style, text : String) -> String {
+  self.wrap("1;32", text)
+}
+
+///|
 fn Style::yellow(self : Style, text : String) -> String {
   self.wrap("33", text)
 }

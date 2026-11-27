@@ -20,4 +20,5 @@ description = "A reliable dependency update tool for MoonBit projects and GitHub
 import {
   "unmbt/moon-manifest@0.3.0",
   "unmbt/cac@0.1.1",
+  "unmbt/clack@0.1.2",
 }

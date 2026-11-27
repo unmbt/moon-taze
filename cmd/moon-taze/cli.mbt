@@ -26,6 +26,7 @@ priv struct CliOptions {
   mut show_all : Bool
   all_seen : Bool
   write : Bool
+  interactive : Bool
   json_output : Bool
   silent : Bool
   verify : Bool
@@ -63,9 +64,7 @@ fn build_cli() -> @cac.CAC {
   )
   .option("-C, --cwd <dir>", "Start discovery from DIR")
   .option("-w, --write", "Apply recommended updates")
-  .option(
-    "-I, --interactive", "Choose dependencies interactively (not implemented yet)",
-  )
+  .option("-I, --interactive", "Choose dependencies and versions interactively")
   .option("-a, --all", "Show up-to-date and skipped dependencies")
   .option(
     "-r, --recursive", "Discover nested moon.mod and GitHub Actions files",
@@ -244,12 +243,6 @@ fn parse_cli_args(args : Array[String]) -> CliParseOutcome raise CliError {
     Help(text) => Help(text)
     Version(_) => Version(VERSION)
     Matched(ctx) => {
-      if ctx.bool("interactive") {
-        cli_error(
-          "interactive mode (-I/--interactive) is not implemented yet",
-          code="not_implemented",
-        )
-      }
       let mut mode = @taze.UpdateMode::Default
       let mut mode_seen = false
       if ctx.arg("mode") is Some(value) {
@@ -329,6 +322,7 @@ fn parse_cli_args(args : Array[String]) -> CliParseOutcome raise CliError {
         show_all: ctx.bool("all"),
         all_seen: raw_has_flag(argv, "all", short_name=Some("a")),
         write: ctx.bool("write"),
+        interactive: ctx.bool("interactive"),
         json_output: ctx.bool("json"),
         silent: ctx.bool("silent"),
         verify: ctx.bool("verify"),

@@ -96,7 +96,7 @@ flowchart TD
 
 - Built with [`unmbt/cac`](https://github.com/unmbt/cac) using `parse(argv~, run=false)` for pure, side-effect-free parsing in `async fn main` and unit tests.
 - Precedence: **CLI flags > `moon-taze.json` > built-in defaults**.
-- **Interactive mode (`-I` / `--interactive`)**: Temporarily disabled following removal of incompatible TUI dependencies on `v1.0.0-rc1`; returns diagnostic code `not_implemented` and exit code `2` immediately (in both text and `--json` modes).
+- **Interactive mode (`-I` / `--interactive`)**: Powered by [`unmbt/clack`](https://github.com/unmbt/clack) (`BodyView::CustomLines`, `run_prompt`, and `confirm`) with 1:1 upstream `taze` table layout, Space/a/i toggling, `→` per-dependency version picker (including unchecked `NoCandidate` major updates and on-demand release age fetching), and post-selection write + `moon check` confirmation prompts. Requires an interactive TTY in text mode (`not_interactive`, exit code `2` otherwise); ignored in `--json` mode.
 - **Exit codes**:
   - `0`: Success (or cancelled before any commit).
   - `1`: Outdated dependencies found with `--fail-on-outdated` and no errors.

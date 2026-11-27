@@ -42,15 +42,11 @@ test "cac CLI help, bare version, defaults, and core options" {
 }
 
 ///|
-test "interactive flag fails fast with not_implemented error" {
+test "interactive flag parses cleanly for both -I and --interactive" {
   for flag in ["-I", "--interactive"] {
-    try ignore(parse_cli_args(["moon-taze", flag])) catch {
-      CliError(code~, message~) => {
-        assert_eq(code, "not_implemented")
-        assert_true(message.contains("not implemented"))
-      }
-    } noraise {
-      _ => fail("expected not_implemented error for \{flag}")
+    match parse_cli_args(["moon-taze", flag]) {
+      Parsed(opts) => assert_true(opts.interactive)
+      _ => fail("expected Parsed for \{flag}")
     }
   }
 }

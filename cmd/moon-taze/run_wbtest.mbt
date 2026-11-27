@@ -1,5 +1,5 @@
 ///|
-async test "CLI interactive flag returns exit code 2 in both text and JSON modes" {
+async test "CLI interactive flag requires TTY in text mode and is ignored in JSON mode" {
   let root = @fs.tmpdir(prefix="moon-taze-cli-interactive")
   defer @fs.remove(root, recursive=true)
   @fs.write_binary(root + "/moon.mod", b"name = \"demo/app\"\n")
@@ -8,10 +8,11 @@ async test "CLI interactive flag returns exit code 2 in both text and JSON modes
     ["moon-taze", "-I", "-C", root],
     fetch=name => @taze.ModuleMetadata(name, None, []),
     emit=line => text_out.push(line),
+    interactive_tty=Some(false),
     color=Some(false),
   )
   assert_eq(text_code, 2)
-  assert_true(text_out.any(line => line.contains("not_implemented")))
+  assert_true(text_out.any(line => line.contains("not_interactive")))
 
   let json_out : Array[String] = []
   let json_code = run_cli(
@@ -19,9 +20,266 @@ async test "CLI interactive flag returns exit code 2 in both text and JSON modes
     fetch=name => @taze.ModuleMetadata(name, None, []),
     emit=line => json_out.push(line),
   )
-  assert_eq(json_code, 2)
+  assert_eq(json_code, 0)
   assert_eq(json_out.length(), 1)
-  assert_true(json_out[0].contains("\"code\":\"not_implemented\""))
+  assert_true(json_out[0].contains("\"status\":\"ok\""))
+}
+
+///|
+async test "CLI interactive TUI supports per-dep version picker, NoCandidate opt-in, GHA SHA lookup, on-demand ages, and confirms" {
+  let root = @fs.tmpdir(prefix="moon-taze-cli-tui-e2e")
+  defer @fs.remove(root, recursive=true)
+  @fs.mkdir(root + "/.github/workflows", recursive=true)
+  let mod_path = root + "/moon.mod"
+  let ci_path = root + "/.github/workflows/ci.yml"
+  @fs.write_binary(
+    mod_path, b"name = \"acme/app\"\nimport {\n  \"acme/minor-lib@1.0.0\",\n  \"acme/major-only@1.0.0\",\n  \"acme/patch-lib@0.2.1\",\n}\n",
+  )
+  @fs.write_binary(
+    ci_path, b"jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4.1.0\n",
+  )
+  let now = 1000000000000L
+  let day = 86400000L
+  let sha_v420 = "4444444444444444444444444444444444444444"
+  let sha_v500 = "5555555555555555555555555555555555555555"
+  let verified_dirs : Array[String] = []
+
+  // Initial diff-asc order in `acme/app` (import):
+  //   0: acme/major-only (Major 2.1.0, unchecked NoCandidate)
+  //   1: acme/minor-lib  (Minor 1.2.0, checked)
+  //   2: acme/patch-lib  (Patch 0.2.3, checked)
+  // Plus `.github/workflows/ci.yml` (github-actions):
+  //   3: actions/checkout (Minor v4.2.0, checked)
+  //
+  // Key sequence:
+  // - On cursor 0 (acme/major-only): Right -> choices [latest=2.1.0, major=2.0.0] -> Down (2.0.0) -> Enter (opts in & sets 2.0.0)
+  // - Down to cursor 1 (acme/minor-lib): Right -> choices [minor=1.2.0, latest=2.0.0, minor=1.1.0] -> Down -> Down (1.1.0) -> Enter
+  // - Down to cursor 2 (acme/patch-lib): Space (unchecks acme/patch-lib)
+  // - Down to cursor 3 (actions/checkout): Right -> choices [minor=v4.2.0, major=v5.0.0] -> Down (v5.0.0) -> Enter
+  // - Enter to confirm list
+  // - 'y' on "write to moon.mod and GitHub Actions?"
+  // - 'y' on "run moon check now?"
+  let vt = @clack_term.VirtualTerminal(
+    [
+      b"\x1b[C", b"\x1b[B", b"\r", b"\x1b[B", b"\x1b[C", b"\x1b[B", b"\x1b[B", b"\r",
+      b"\x1b[B", b" ", b"\x1b[B", b"\x1b[C", b"\x1b[B", b"\r", b"\r", b"y", b"y",
+    ],
+    cols=100,
+    rows=30,
+    tty=true,
+  )
+  let session = @clack_prompts.Session(term=vt, color_level=None)
+  let output : Array[String] = []
+  let code = run_cli(
+    ["moon-taze", "-I", "--github-actions-style", "sha", "-C", root],
+    fetch=name => {
+      if name == "acme/minor-lib" {
+        @taze.ModuleMetadata(name, Some("2.0.0"), [
+          @taze.VersionMetadata("1.0.0", false, None, None),
+          @taze.VersionMetadata("1.1.0", false, None, None),
+          @taze.VersionMetadata("1.2.0", false, None, None),
+          @taze.VersionMetadata("2.0.0", false, None, None),
+        ])
+      } else if name == "acme/major-only" {
+        @taze.ModuleMetadata(name, Some("2.1.0"), [
+          @taze.VersionMetadata("1.0.0", false, None, None),
+          @taze.VersionMetadata("2.0.0", false, None, None),
+          @taze.VersionMetadata("2.1.0", false, None, None),
+        ])
+      } else {
+        @taze.ModuleMetadata(name, Some("0.2.3"), [
+          @taze.VersionMetadata("0.2.1", false, None, None),
+          @taze.VersionMetadata("0.2.3", false, None, None),
+        ])
+      }
+    },
+    fetch_version=(_, version) => {
+      let age = if version == "1.0.0" || version == "0.2.1" {
+        30L * day
+      } else if version == "1.1.0" {
+        12L * day
+      } else {
+        5L * day
+      }
+      Some(@taze.VersionMetadata(version, false, None, Some(now - age)))
+    },
+    fetch_gha=repo => {
+      @taze.ModuleMetadata(repo, Some("v5.0.0"), [
+        @taze.VersionMetadata("v4.1.0", false, None, None, sha=Some(sha_v420)),
+        @taze.VersionMetadata("v4.2.0", false, None, None, sha=Some(sha_v420)),
+        @taze.VersionMetadata("v5.0.0", false, None, None, sha=Some(sha_v500)),
+      ])
+    },
+    fetch_gha_commit_date=(_, sha) => {
+      if sha == sha_v500 {
+        Some(now - 3L * day)
+      } else {
+        Some(now - 10L * day)
+      }
+    },
+    emit=line => output.push(line),
+    color=Some(false),
+    now_ms=Some(now),
+    session=Some(session),
+    run_verify=Some((dir, _) => {
+      verified_dirs.push(dir)
+      { path: dir, passed: true, exit_code: 0, }
+    }),
+  )
+  assert_eq(code, 0)
+  assert_false(vt.in_raw_mode())
+
+  // Verify TUI frames rendered list header, version picker header, and live age progress bar.
+  let term_out = vt.all_output()
+  assert_true(term_out.contains("to change version"))
+  assert_true(term_out.contains("Select a version for acme/minor-lib"))
+  assert_true(term_out.contains("age "))
+
+  // Verify written files reflect exact per-dependency selections and SHAs.
+  let mod_text = @fs.read_text(mod_path)
+  assert_true(mod_text.contains("acme/minor-lib@1.1.0"))
+  assert_true(mod_text.contains("acme/major-only@2.0.0"))
+  assert_true(mod_text.contains("acme/patch-lib@0.2.1"))
+  let ci_text = @fs.read_text(ci_path)
+  assert_true(ci_text.contains("actions/checkout@\{sha_v500} # v5.0.0"))
+  assert_false(ci_text.contains(sha_v420))
+
+  // Verify `moon check` confirmation executed.
+  assert_eq(verified_dirs.length(), 1)
+}
+
+///|
+async test "CLI interactive cancel and write decline leave manifests untouched" {
+  let root = @fs.tmpdir(prefix="moon-taze-cli-tui-cancel")
+  defer @fs.remove(root, recursive=true)
+  let mod_path = root + "/moon.mod"
+  let original = b"name = \"acme/app\"\nimport { \"acme/lib@1.0.0\" }\n"
+  @fs.write_binary(mod_path, original)
+  let fetch : async (String) -> @taze.ModuleMetadata raise @taze.RegistryError = name => {
+    @taze.ModuleMetadata(name, Some("1.2.0"), [
+      @taze.VersionMetadata("1.0.0", false, None, None),
+      @taze.VersionMetadata("1.2.0", false, None, None),
+    ])
+  }
+
+  // 1. Pressing 'q' cancels cleanly without writing.
+  let vt_cancel = @clack_term.VirtualTerminal(
+    [b"q"],
+    cols=80,
+    rows=20,
+    tty=true,
+  )
+  let cancel_code = run_cli(
+    ["moon-taze", "-I", "-C", root],
+    fetch~,
+    emit=_ => (),
+    color=Some(false),
+    session=Some(@clack_prompts.Session(term=vt_cancel, color_level=None)),
+  )
+  assert_eq(cancel_code, 0)
+  assert_eq(@fs.read_binary(mod_path), original)
+
+  // 2. Confirming selection then declining write ('n') prints tip and leaves disk untouched.
+  let vt_no = @clack_term.VirtualTerminal(
+    [b"\r", b"n"],
+    cols=80,
+    rows=20,
+    tty=true,
+  )
+  let no_out : Array[String] = []
+  let no_code = run_cli(
+    ["moon-taze", "-I", "-C", root],
+    fetch~,
+    emit=line => no_out.push(line),
+    color=Some(false),
+    session=Some(@clack_prompts.Session(term=vt_no, color_level=None)),
+  )
+  assert_eq(no_code, 0)
+  assert_eq(@fs.read_binary(mod_path), original)
+  assert_true(no_out.any(line => line.contains("Add -w to write to moon.mod")))
+}
+
+///|
+async test "CLI interactive version picker renders immediately with progress bar, updates live, and stays non-blocking" {
+  let root = @fs.tmpdir(prefix="moon-taze-cli-tui-nonblocking")
+  defer @fs.remove(root, recursive=true)
+  let mod_path = root + "/moon.mod"
+  @fs.write_binary(
+    mod_path, b"name = \"acme/app\"\nimport { \"acme/lib@1.0.0\" }\n",
+  )
+  let frames : Array[String] = []
+  let fetched : Array[String] = []
+  let ct = @clack_term.CallbackTerminal(
+    on_write=chunk => frames.push(chunk.to_owned()),
+    cols=100,
+    rows=24,
+    tty=true,
+  )
+  let session = @clack_prompts.Session(term=ct, color_level=None)
+  let now = 1000000000000L
+  let day = 86400000L
+  let code_ref : Ref[Int32] = Ref(-1)
+  @async.with_task_group(group => {
+    group.spawn_bg(async fn() {
+      code_ref.val = run_cli(
+        ["moon-taze", "-I", "-C", root],
+        fetch=name => {
+          @taze.ModuleMetadata(name, Some("2.0.0"), [
+            @taze.VersionMetadata("1.0.0", false, None, None),
+            @taze.VersionMetadata("1.1.0", false, None, None),
+            @taze.VersionMetadata("1.2.0", false, None, None),
+            @taze.VersionMetadata("2.0.0", false, None, None),
+          ])
+        },
+        fetch_version=(name, version) => {
+          fetched.push(name + "@" + version)
+          if version == "1.1.0" {
+            @async.sleep(60)
+            Some(
+              @taze.VersionMetadata(version, false, None, Some(now - 12L * day)),
+            )
+          } else if version == "2.0.0" {
+            @async.sleep(250)
+            Some(
+              @taze.VersionMetadata(version, false, None, Some(now - 3L * day)),
+            )
+          } else {
+            Some(
+              @taze.VersionMetadata(version, false, None, Some(now - 30L * day)),
+            )
+          }
+        },
+        emit=_ => (),
+        color=Some(false),
+        now_ms=Some(now),
+        session=Some(session),
+      )
+    })
+    // Wait briefly for initial list view, then press Right to open version picker.
+    @async.sleep(30)
+    ct.push_input(b"\x1b[C")
+    // Immediately (within 25ms, before 60ms/250ms fetches finish) picker + 0/2 progress bar appear!
+    @async.sleep(25)
+    let snap_early = frames.join("")
+    assert_true(snap_early.contains("Select a version for acme/lib"))
+    assert_true(snap_early.contains("age "))
+    assert_true(snap_early.contains("0/2"))
+    // Wait 70ms: fast 1.1.0 (60ms) finishes and redraws live with 1/2 + ~12d while 2.0.0 (250ms) is still loading!
+    @async.sleep(70)
+    let snap_mid = frames.join("")
+    assert_true(snap_mid.contains("1/2"))
+    assert_true(snap_mid.contains("~12d"))
+    assert_true(fetched.contains("acme/lib@1.1.0"))
+    // User can immediately move down to 2.0.0 and confirm without waiting for 2.0.0's 250ms fetch!
+    ct.push_input(b"\x1b[B")
+    ct.push_input(b"\r")
+    ct.push_input(b"\r")
+    ct.push_input(b"y")
+    ct.push_input(b"n")
+  })
+  assert_eq(code_ref.val, 0)
+  assert_false(ct.in_raw_mode())
+  assert_true(@fs.read_text(mod_path).contains("acme/lib@2.0.0"))
 }
 
 ///|

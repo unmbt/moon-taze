@@ -49,12 +49,14 @@ priv struct PendingWrite {
 
 ///|
 fn validate_target_upgrade(change : DependencyChange, target : String) -> Bool {
-  if change.status != UpdateAvailable {
+  if change.status != UpdateAvailable && change.status != NoCandidate {
     return false
   }
   match change.dependency.source {
     GitHubActions => {
-      if change.diff == Some(Pin) && change.target == Some(target) {
+      if change.status == UpdateAvailable &&
+        change.diff == Some(Pin) &&
+        change.target == Some(target) {
         return true
       }
       if !change.candidates.contains(target) && change.target != Some(target) {
@@ -134,7 +136,16 @@ fn prepare_patches(
       )
       continue
     }
-    selected[key] = (target, change.target_sha)
+    let resolved_sha = match change.candidate_shas.get(target) {
+      Some(sha) => Some(sha)
+      None =>
+        if change.target == Some(target) {
+          change.target_sha
+        } else {
+          None
+        }
+    }
+    selected[key] = (target, resolved_sha)
   }
   let prepared : Array[PreparedManifest] = []
   for snapshot in plan.snapshots {

@@ -335,10 +335,38 @@ fn render_text_report(
   now~ : Int64 = @async.now(),
   emit~ : (String) -> Unit,
 ) -> Unit {
+  render_changes_report(
+    manifests,
+    plan.changes(),
+    plan.diagnostics(),
+    plan.has_errors(),
+    options,
+    detail_times,
+    extra_diagnostics,
+    style,
+    now~,
+    show_footer_tips=!options.write,
+    emit~,
+  )
+}
+
+///|
+fn render_changes_report(
+  manifests : Array[@taze.Manifest],
+  all_changes : Array[@taze.DependencyChange],
+  plan_diagnostics : Array[@taze.Diagnostic],
+  has_errors : Bool,
+  options : CliOptions,
+  detail_times : Map[String, Int64],
+  extra_diagnostics : Array[@taze.Diagnostic],
+  style : Style,
+  now~ : Int64 = @async.now(),
+  show_footer_tips~ : Bool = true,
+  emit~ : (String) -> Unit,
+) -> Unit {
   if options.json_output || options.silent {
     return
   }
-  let all_changes = plan.changes()
   let lines : Array[String] = []
   let err_lines : Array[String] = []
   let mut packages_with_updates = 0
@@ -430,7 +458,7 @@ fn render_text_report(
   }
 
   // Collect plan-level error diagnostics that weren't tied to a dependency change.
-  for diag in plan.diagnostics() {
+  for diag in plan_diagnostics {
     if diag.severity is Error && diag.dependency is None {
       let loc = diag.manifest.unwrap_or("manifest")
       err_lines.push(
@@ -442,7 +470,7 @@ fn render_text_report(
 
   // Show warnings cleanly when `--all` or explicitly relevant.
   let warnings : Array[@taze.Diagnostic] = []
-  for diag in plan.diagnostics() {
+  for diag in plan_diagnostics {
     if diag.severity is Warning {
       warnings.push(diag)
     }
@@ -496,7 +524,7 @@ fn render_text_report(
   }
 
   // Footer tips matching upstream `taze`.
-  if !options.write && has_updates && !plan.has_errors() {
+  if show_footer_tips && has_updates && !has_errors {
     emit("")
     if options.mode == Default {
       let cmd_hint = style.cyan("moon-taze major")

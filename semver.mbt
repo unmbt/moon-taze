@@ -276,6 +276,18 @@ fn diff_kind(current : SemVer, target : SemVer) -> DiffKind {
 }
 
 ///|
+/// Compute the semantic diff kind between two SemVer strings.
+pub fn semver_diff_kind(current : String, target : String) -> DiffKind? {
+  let curr = parse_version(current) catch { _ => return None }
+  let next = parse_version(target) catch { _ => return None }
+  if SemVer::compare(next, curr) == 0 {
+    None
+  } else {
+    Some(diff_kind(curr, next))
+  }
+}
+
+///|
 /// Select a target from a module's versions using the requested update mode.
 pub fn select_version(
   current : SemVer,

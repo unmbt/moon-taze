@@ -71,6 +71,8 @@ pub fn select_version(SemVer, Array[SemVer], latest? : SemVer, mode~ : UpdateMod
 
 pub fn selector_valid(String) -> Bool
 
+pub fn semver_diff_kind(String, String) -> DiffKind?
+
 pub fn valid_gha_metadata(ModuleMetadata, String) -> Bool
 
 pub fn valid_metadata(ModuleMetadata, String) -> Bool
@@ -203,10 +205,13 @@ pub struct DependencyChange {
   target_sha : String?
   latest_available : String?
   candidates : Array[String]
+  candidate_shas : Map[String, String]
   diff : DiffKind?
   reason : String?
   diagnostics : Array[Diagnostic]
 }
+pub fn DependencyChange::as_skipped(Self, String) -> Self
+pub fn DependencyChange::with_target(Self, String, target_sha? : String?, diff? : DiffKind?) -> Self
 
 #derive(Eq, @debug.Debug)
 pub(all) enum DependencySource {

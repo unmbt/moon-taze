@@ -1,6 +1,10 @@
 import {
   "unmbt/moon-taze" @taze,
   "unmbt/cac",
+  "unmbt/clack/ansi" @clack_ansi,
+  "unmbt/clack/core" @clack_core,
+  "unmbt/clack/prompts" @clack_prompts,
+  "unmbt/clack/term" @clack_term,
   "moonbitlang/core/async",
   "moonbitlang/core/async/fs",
   "moonbitlang/core/async/process",

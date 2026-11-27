@@ -20,6 +20,7 @@ fn invalid_metadata_change(
     target_sha: None,
     latest_available: None,
     candidates: [],
+    candidate_shas: Map([]),
     diff: None,
     reason: Some("invalid_metadata"),
     diagnostics: [diag],
@@ -40,6 +41,7 @@ fn skipped_change(
     target_sha: None,
     latest_available: None,
     candidates: [],
+    candidate_shas: Map([]),
     diff: None,
     reason: Some(reason),
     diagnostics: [],
@@ -68,6 +70,7 @@ fn selector_error_change(
     target_sha: None,
     latest_available: None,
     candidates: [],
+    candidate_shas: Map([]),
     diff: None,
     reason: Some("invalid_filter"),
     diagnostics: [diag],
@@ -145,6 +148,7 @@ fn resolve_dependency_mooncakes_standard(
         target_sha: None,
         latest_available: None,
         candidates: [],
+        candidate_shas: Map([]),
         diff: None,
         reason: Some("invalid_version"),
         diagnostics: [diag],
@@ -241,6 +245,7 @@ fn resolve_dependency_mooncakes_standard(
         target_sha: None,
         latest_available,
         candidates: candidate_names,
+        candidate_shas: Map([]),
         diff: None,
         reason: if has_higher_unfiltered {
           Some("no_candidate")
@@ -258,6 +263,7 @@ fn resolve_dependency_mooncakes_standard(
         target_sha: None,
         latest_available,
         candidates: candidate_names,
+        candidate_shas: Map([]),
         diff: Some(diff_kind(current, version)),
         reason: None,
         diagnostics: metadata_diagnostics,
@@ -291,6 +297,7 @@ fn resolve_dependency_mooncakes_timed(
         target_sha: None,
         latest_available: None,
         candidates: [],
+        candidate_shas: Map([]),
         diff: None,
         reason: Some("invalid_version"),
         diagnostics: [diag],
@@ -382,6 +389,7 @@ fn resolve_dependency_mooncakes_timed(
         target_sha: None,
         latest_available: None,
         candidates: candidate_names,
+        candidate_shas: Map([]),
         diff: None,
         reason: Some("incomplete_release_times"),
         diagnostics,
@@ -467,6 +475,7 @@ fn resolve_dependency_mooncakes_timed(
         target_sha: None,
         latest_available,
         candidates: candidate_names,
+        candidate_shas: Map([]),
         diff: Some(diff_kind(current, target)),
         reason: None,
         diagnostics,
@@ -484,6 +493,7 @@ fn resolve_dependency_mooncakes_timed(
         target_sha: None,
         latest_available,
         candidates: candidate_names,
+        candidate_shas: Map([]),
         diff: None,
         reason: if candidate_names.is_empty() {
           None
@@ -552,7 +562,14 @@ fn resolve_dependency_gha(
     Some(target) if target.tag != dependency.version => {
       let target_sha = match sha_map.get(target.tag) {
         Some(sha) => Some(sha)
-        None => sha_map.get(target.resolved_tag)
+        None =>
+          match sha_map.get(target.resolved_tag) {
+            Some(sha) => {
+              sha_map[target.tag] = sha
+              Some(sha)
+            }
+            None => None
+          }
       }
       let latest_available = compute_gha_latest_available(
         dependency.version,
@@ -567,6 +584,7 @@ fn resolve_dependency_gha(
         target_sha,
         latest_available,
         candidates: all_tags,
+        candidate_shas: sha_map,
         diff: action_diff_kind(dependency.version, target.tag),
         reason: None,
         diagnostics,
@@ -592,6 +610,7 @@ fn resolve_dependency_gha(
           target_sha: Some(sha),
           latest_available,
           candidates: all_tags,
+          candidate_shas: sha_map,
           diff: Some(Pin),
           reason: None,
           diagnostics,
@@ -620,6 +639,7 @@ fn resolve_dependency_gha(
         target_sha: None,
         latest_available,
         candidates: all_tags,
+        candidate_shas: sha_map,
         diff: None,
         reason: if has_higher {
           Some("no_candidate")
@@ -966,6 +986,7 @@ async fn check_single_manifest_internal(
         target_sha: None,
         latest_available: None,
         candidates: [],
+        candidate_shas: Map([]),
         diff: None,
         reason: Some("local_workspace"),
         diagnostics: [note],
@@ -1053,6 +1074,7 @@ async fn check_single_manifest_internal(
           target_sha: None,
           latest_available: None,
           candidates: [],
+          candidate_shas: Map([]),
           diff: None,
           reason: Some(error.code()),
           diagnostics: [diag],

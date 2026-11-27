@@ -188,3 +188,84 @@ async test "parse errors survive check and callbacks control apply lifecycle" {
   assert_eq(post_fail.diagnostics()[0].code, "callback_failed")
   assert_eq(@fs.read_binary(path), b"import {\"demo/lib@1.1.0\"}")
 }
+
+///|
+async test "manual selection allows opting into NoCandidate upgrades and uses chosen GHA tag SHA" {
+  let root = @fs.tmpdir(prefix="moon-taze-custom-selection")
+  defer @fs.remove(root, recursive=true)
+  @fs.mkdir(root + "/.github/workflows", recursive=true)
+  let mod_path = root + "/moon.mod"
+  let ci_path = root + "/.github/workflows/ci.yml"
+  @fs.write_binary(
+    mod_path, b"name = \"demo/app\"\nimport { \"demo/lib@1.0.0\" }\n",
+  )
+  @fs.write_binary(
+    ci_path, b"jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4.1.0\n",
+  )
+  let mod_manifest = @moon-taze.parse_manifest(
+    @fs.read_binary(mod_path),
+    path=mod_path,
+    module_name="demo/app",
+  ).manifest.unwrap()
+  let gha_manifest = @moon-taze.parse_github_actions_manifest(
+    @fs.read_binary(ci_path),
+    path=ci_path,
+  ).manifest.unwrap()
+  let sha_v420 = "4444444444444444444444444444444444444444"
+  let sha_v500 = "5555555555555555555555555555555555555555"
+  let plan = @moon-taze.check_manifests(
+    [mod_manifest, gha_manifest],
+    options=@moon-taze.CheckOptions(mode=Default, gha_style=Sha, cwd=root),
+    fetch=name => {
+      @moon-taze.ModuleMetadata(name, Some("2.0.0"), [
+        @moon-taze.VersionMetadata("1.0.0", false, None, None),
+        @moon-taze.VersionMetadata("2.0.0", false, None, None),
+      ])
+    },
+    fetch_gha=repo => {
+      @moon-taze.ModuleMetadata(repo, Some("v5.0.0"), [
+        @moon-taze.VersionMetadata(
+          "v4.1.0",
+          false,
+          None,
+          None,
+          sha=Some(sha_v420),
+        ),
+        @moon-taze.VersionMetadata(
+          "v4.2.0",
+          false,
+          None,
+          None,
+          sha=Some(sha_v420),
+        ),
+        @moon-taze.VersionMetadata(
+          "v5.0.0",
+          false,
+          None,
+          None,
+          sha=Some(sha_v500),
+        ),
+      ])
+    },
+  )
+  // Default mode leaves `demo/lib@1.0.0` as NoCandidate (only 2.0.0 major exists),
+  // and recommends `v4.2.0` (sha_v420) for actions/checkout.
+  assert_eq(plan.changes()[0].status, NoCandidate)
+  assert_eq(plan.changes()[1].target, Some("v4.2.0"))
+  assert_eq(plan.changes()[1].target_sha, Some(sha_v420))
+
+  // Interactive user opts into 2.0.0 and switches actions/checkout to v5.0.0.
+  let report = @moon-taze.apply(
+    plan,
+    plan.selection([
+      (mod_path, "demo/lib", "2.0.0"),
+      (ci_path, "actions/checkout", "v5.0.0"),
+    ]),
+  )
+  assert_eq(report.exit_code(), 0)
+  assert_eq(report.written_files(), 2)
+  assert_true(@fs.read_text(mod_path).contains("demo/lib@2.0.0"))
+  let written_ci = @fs.read_text(ci_path)
+  assert_true(written_ci.contains("actions/checkout@\{sha_v500} # v5.0.0"))
+  assert_false(written_ci.contains(sha_v420))
+}
